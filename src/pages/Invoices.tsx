@@ -1,5 +1,4 @@
-import { sc, getCompanyId, isGstCompany } from "../lib/company";
-import { splitGst, isInterState, stateCodeFromGstin, formatGstBreakup, GST_RATES } from "../lib/gstCalc";
+import { sc, getCompanyId } from "../lib/company";
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { fmtDate } from "../lib/formatDate";
@@ -107,10 +106,6 @@ const [invoicedQtyByJob, setInvoicedQtyByJob] = useState<Record<string, number>>
   const [selectedJob, setSelectedJob] = useState<JobCard | null>(null);
   const [lineItems, setLineItems] = useState<LineItem[]>([]);
 
-  // GST context — current company ke hisaab se
-  const [isGstMode, setIsGstMode] = useState(false);
-  const [companyStateCode, setCompanyStateCode] = useState("");
-
   const invoiceCols = {
     invoice_no: (i: any) => String(i.invoice_no || ""),
     invoice_date: (i: any) => String(i.invoice_date || ""),
@@ -124,16 +119,6 @@ const [invoicedQtyByJob, setInvoicedQtyByJob] = useState<Record<string, number>>
 
   const loadData = async () => {
     setLoading(true);
-
-    // GST context: company ka tax mode + state code
-    const { data: companyRows } = await supabase
-      .from("companies")
-      .select("id, tax_mode, state_code, gstin")
-      .eq("id", getCompanyId())
-      .limit(1);
-    const companyRow: any = companyRows && companyRows[0] ? companyRows[0] : null;
-    setIsGstMode(isGstCompany(companyRow));
-    setCompanyStateCode(String(companyRow?.state_code || ""));
 
     const [invRes, purchaseRes, itemRes, custRes, jobRes, invoiceItemsRes, priceRes] = await Promise.all([
       sc("invoices").select("*").order("id", { ascending: false }),
@@ -299,20 +284,6 @@ const [invoicedQtyByJob, setInvoicedQtyByJob] = useState<Record<string, number>>
     return null;
   };
 
-  // GST company me item master ka HSN + default GST% line par auto-fill karo,
-  // taaki billi banate waqt har line me type na karna pade.
-  const applyMasterGstDefaults = (
-    line: LineItem,
-    master: ItemMaster | undefined | null
-  ): LineItem => {
-    if (!isGstMode || !master) return line;
-    if (!line.hsn_code && master.hsn_code) line.hsn_code = String(master.hsn_code);
-    if (line.gst_percent === undefined || line.gst_percent === null) {
-      line.gst_percent = Number(master.gst_percent ?? 0) || 0;
-    }
-    return line;
-  };
-
   const handleJobCardSelect = (jobId: string) => {
     setSelectedJobCardId(jobId);
     const job = openJobCards.find((j) => String(j.id) === jobId);
@@ -328,7 +299,7 @@ const breakdownLines: LineItem[] = [];
 
 if (repStats.pending > 0) {
         const rate = getMasterItemPrice("Module Service", String(job.customer_id));
-        breakdownLines.push(applyMasterGstDefaults({
+        breakdownLines.push({
           id: Math.random().toString(),
           source: "Repairing",
           inward_no: "JOB-REP",
@@ -340,13 +311,13 @@ if (repStats.pending > 0) {
           cost_rate: 0,
           max_stock: 999,
           editable: true,
-        }, findMasterItem("Module Service")));
+        });
       }
 
       const warrantyLeft = getRemainingQty(Number(job.id), "JOB-WAR", job.warranty_quantity);
       if (warrantyLeft > 0) {
         const rate = getMasterItemPrice("Warranty Service", String(job.customer_id));
-        breakdownLines.push(applyMasterGstDefaults({
+        breakdownLines.push({
           id: Math.random().toString(),
           source: "Warranty",
           inward_no: "JOB-WAR",
@@ -358,13 +329,13 @@ if (repStats.pending > 0) {
           cost_rate: 0,
           max_stock: 999,
           editable: false,
-        }, findMasterItem("Warranty Service")));
+        });
       }
 
       const rejectLeft = getRemainingQty(Number(job.id), "JOB-REJ", job.reject_quantity);
       if (rejectLeft > 0) {
         const rate = getMasterItemPrice("Reject Module", String(job.customer_id));
-        breakdownLines.push(applyMasterGstDefaults({
+        breakdownLines.push({
           id: Math.random().toString(),
           source: "Reject",
           inward_no: "JOB-REJ",
@@ -376,7 +347,7 @@ if (repStats.pending > 0) {
           cost_rate: 0,
           max_stock: 999,
           editable: false,
-        }, findMasterItem("Reject Module")));
+        });
       }
 
       setLineItems(breakdownLines);
@@ -526,7 +497,6 @@ if (repStats.pending > 0) {
                 updatedLine.rate = customerRate ?? matchedMasterItem?.sale_price ?? foundStock.item_master?.sale_price ?? 0;
                 updatedLine.cost_rate = foundStock.purchase_rate || 0;
                 updatedLine.max_stock = availableQty;
-                applyMasterGstDefaults(updatedLine, matchedMasterItem);
 
                 if (availableQty <= 0) {
                   alert(`Inward ${foundStock.inward_no} mein is item ka stock available nahi hai.`);
@@ -576,24 +546,9 @@ if (repStats.pending > 0) {
     );
   };
 
-  const selectedCustomer = customers.find((c) => String(c.id) === String(selectedCustomerId)) || null;
-  const interStateSupply = isInterState(companyStateCode, stateCodeFromGstin(selectedCustomer?.gst_number));
-
   const baseTotal = lineItems.reduce((sum, item) => sum + (Number(item.total) || 0), 0);
   const totalPurchaseCost = lineItems.reduce((sum, item) => sum + (Number(item.quantity || 0) * Number(item.cost_rate)), 0);
-
-  // GST company me hi GST lagta hai. Non-GST company me old behaviour (grandTotal = baseTotal).
-  const gstLineSplits = lineItems.map((item) =>
-    splitGst(Number(item.total) || 0, Number(item.gst_percent) || 0, interStateSupply)
-  );
-  const gstTotals = formatGstBreakup(gstLineSplits);
-  const applyGst = isGstMode && gstTotals.totalGst > 0;
-  const grandTotal = applyGst ? gstTotals.grandTotal : baseTotal;
-  const gstTaxableTotal = applyGst ? gstTotals.taxableValue : baseTotal;
-  const gstTotalAmount = applyGst ? gstTotals.totalGst : 0;
-  const cgstTotal = applyGst ? gstTotals.cgst : 0;
-  const sgstTotal = applyGst ? gstTotals.sgst : 0;
-  const igstTotal = applyGst ? gstTotals.igst : 0;
+  const grandTotal = baseTotal;
 
   const handleEditInvoice = async (inv: Invoice) => {
     try {
@@ -639,8 +594,6 @@ if (repStats.pending > 0) {
           rate: it.rate,
           total: it.total,
           cost_rate: it.cost_rate || 0,
-          hsn_code: it.hsn_code || "",
-          gst_percent: Number(it.gst_percent ?? 0) || 0,
           max_stock: it.inward_no?.startsWith("JOB") ? 999 : Math.max(
             Number(purchaseStock.find((purchase) =>
               String(purchase.inward_no || "") === String(it.inward_no || "") &&
@@ -809,27 +762,16 @@ const handleDeleteInvoice = async (inv: Invoice) => {
         p_job_card_id: activeTab === "Job Card" ? Number(selectedJobCardId) : null,
         p_invoice_type: activeTab,
         p_total_amount: Number(grandTotal) || 0,
-        p_lines: lineItems.map((item, lineIndex) => {
-          const split = isGstMode
-            ? gstLineSplits[lineIndex]
-            : { taxableValue: Number(item.total) || 0, cgst: 0, sgst: 0, igst: 0 };
-          return {
-            inward_no: item.inward_no || "",
-            item_id: item.item_id ? Number(item.item_id) : null,
-            item_name: item.item_name || "",
-            quantity: Number(item.quantity) || 1,
-            rate: Number(item.rate) || 0,
-            total: Number(item.total) || 0,
-            cost_rate: Number(item.cost_rate) || 0,
-            source: item.source || "Spare Part",
-            hsn_code: isGstMode ? item.hsn_code || "" : "",
-            gst_percent: isGstMode ? Number(item.gst_percent) || 0 : 0,
-            taxable_value: split.taxableValue,
-            cgst: split.cgst,
-            sgst: split.sgst,
-            igst: split.igst,
-          };
-        }),
+        p_lines: lineItems.map((item) => ({
+          inward_no: item.inward_no || "",
+          item_id: item.item_id ? Number(item.item_id) : null,
+          item_name: item.item_name || "",
+          quantity: Number(item.quantity) || 1,
+          rate: Number(item.rate) || 0,
+          total: Number(item.total) || 0,
+          cost_rate: Number(item.cost_rate) || 0,
+          source: item.source || "Spare Part",
+        })),
         p_old_items: oldItems,
         p_company_id: getCompanyId(),
       };
@@ -1011,9 +953,6 @@ const handleDeleteInvoice = async (inv: Invoice) => {
               <th style={{ padding: 10, borderBottom: "1px solid #ddd", width: 90 }}>Qty</th>
               <th style={{ padding: 10, borderBottom: "1px solid #ddd", width: 120 }}>Rate (₹)</th>
               <th style={{ padding: 10, borderBottom: "1px solid #ddd", width: 120 }}>Total (₹)</th>
-              {isGstMode && <th style={{ padding: 10, borderBottom: "1px solid #ddd", width: 110 }}>HSN</th>}
-              {isGstMode && <th style={{ padding: 10, borderBottom: "1px solid #ddd", width: 90 }}>GST %</th>}
-              {isGstMode && <th style={{ padding: 10, borderBottom: "1px solid #ddd", width: 120, textAlign: "right" }}>GST Amt</th>}
               <th style={{ padding: 10, borderBottom: "1px solid #ddd", width: 120 }}>Purchase Cost</th>
               <th style={{ padding: 10, borderBottom: "1px solid #ddd", width: 50 }}>Action</th>
             </tr>
@@ -1069,46 +1008,6 @@ const handleDeleteInvoice = async (inv: Invoice) => {
                   <input type="number" value={item.rate} onChange={(e) => updateLineItem(item.id, "rate", e.target.value)} readOnly={item.source === "Repairing" ? false : !item.editable} style={{ width: "100%", padding: 9, border: "1px solid #ccc", borderRadius: 4, background: item.source === "Repairing" ? "#fff" : item.editable ? "#fff" : "#f1f5f9" }} />
                 </td>
                 <td style={{ padding: 6, fontWeight: "bold" }}>₹ {item.total.toFixed(2)}</td>
-                {isGstMode && (
-                  <td style={{ padding: 6 }}>
-                    <input
-                      type="text"
-                      value={item.hsn_code || ""}
-                      onChange={(e) => updateLineItem(item.id, "hsn_code", e.target.value)}
-                      placeholder="HSN"
-                      style={{ width: "100%", padding: 8, border: "1px solid #ccc", borderRadius: 4 }}
-                    />
-                  </td>
-                )}
-                {isGstMode && (
-                  <td style={{ padding: 6 }}>
-                    <select
-                      value={String(item.gst_percent ?? 0)}
-                      onChange={(e) => updateLineItem(item.id, "gst_percent", e.target.value)}
-                      style={{ width: "100%", padding: 8, border: "1px solid #ccc", borderRadius: 4 }}
-                    >
-                      {GST_RATES.map((rate) => (
-                        <option key={rate} value={rate}>{rate}%</option>
-                      ))}
-                    </select>
-                  </td>
-                )}
-                {isGstMode && (
-                  <td style={{ padding: 6, fontWeight: "bold", textAlign: "right", whiteSpace: "nowrap" }}>
-                    {(() => {
-                      const s = gstLineSplits[lineItems.indexOf(item)];
-                      if (!s) return "₹ 0.00";
-                      const label = interStateSupply ? "IGST" : s.cgst > 0 ? "CGST+SGST" : "—";
-                      return (
-                        <span title={label}>
-                          ₹ {s.cgst + s.sgst + s.igst > 0
-                            ? (interStateSupply ? s.igst : s.cgst + s.sgst).toFixed(2)
-                            : "0.00"}
-                        </span>
-                      );
-                    })()}
-                  </td>
-                )}
                 <td style={{ padding: 6, color: "#d97706", fontWeight: "bold" }}>₹ {(Number(item.cost_rate || 0) * Number(item.quantity || 0)).toFixed(2)}</td>
                 <td style={{ padding: 6, textAlign: "center" }}>
                   {item.editable && (
@@ -1131,7 +1030,7 @@ const handleDeleteInvoice = async (inv: Invoice) => {
           </button>
         )}
 
-        <div style={{ display: "grid", gridTemplateColumns: isGstMode ? "1fr 1fr 1fr" : "1fr 1fr", gap: "15px", marginTop: 25, background: "#f8fafc", padding: 15, borderRadius: 8, alignItems: "center" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "15px", marginTop: 25, background: "#f8fafc", padding: 15, borderRadius: 8, alignItems: "center" }}>
           <div>
             <label style={{ fontSize: 11, fontWeight: "bold", display: "block", color: "#64748b" }}>Grand Total Bill (₹)</label>
             <strong style={{ color: "#166534", fontSize: 20 }}>₹ {grandTotal.toFixed(2)}</strong>
@@ -1140,21 +1039,6 @@ const handleDeleteInvoice = async (inv: Invoice) => {
             <label style={{ fontSize: 11, fontWeight: "bold", display: "block", color: "#64748b" }}>Total Purchase Cost (₹)</label>
             <strong style={{ color: "#d97706", fontSize: 20 }}>₹ {totalPurchaseCost.toFixed(2)}</strong>
           </div>
-          {isGstMode && (
-            <div>
-              <label style={{ fontSize: 11, fontWeight: "bold", display: "block", color: "#64748b" }}>
-                {interStateSupply ? "IGST (Inter-State)" : "CGST + SGST (Intra-State)"}
-              </label>
-              <strong style={{ color: "#1d4ed8", fontSize: 15 }}>₹ {gstTotalAmount.toFixed(2)}</strong>
-              <div style={{ fontSize: 11, color: "#64748b", marginTop: 3 }}>
-                {interStateSupply ? (
-                  <>IGST ₹{igstTotal.toFixed(2)} &nbsp;•&nbsp; Taxable ₹{gstTaxableTotal.toFixed(2)}</>
-                ) : (
-                  <>CGST ₹{cgstTotal.toFixed(2)} + SGST ₹{sgstTotal.toFixed(2)} &nbsp;•&nbsp; Taxable ₹{gstTaxableTotal.toFixed(2)}</>
-                )}
-              </div>
-            </div>
-          )}
         </div>
 
         <button onClick={handleSaveInvoice} disabled={saving} className="customer-primary-button" style={{ width: "100%", marginTop: 20, background: "#f97316", justifyContent: "center", padding: 14, fontSize: 16 }}>
