@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment variables - NEVER commit real secrets (e.g. service_role key)
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+
+# System files
+.DS_Store
+Thumbs.db
+.vercel
+.env*
