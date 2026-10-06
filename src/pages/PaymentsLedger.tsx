@@ -8,6 +8,8 @@ import {
   voucherAmount,
   type AllocBill,
 } from "../lib/billAllocations";
+import type { BankAccount } from "../lib/bankAccounts";
+import { defaultAccount, loadBankAccounts } from "../lib/bankAccounts";
 
 type Vendor = {
   id: number;
@@ -116,12 +118,15 @@ function PaymentsLedger() {
     deduction: 0,
     amount: 0,
     payment_mode: "Bank / UPI",
+    account_id: "",
     entry_date: new Date().toISOString().slice(0, 10),
     remarks: "",
   });
   const [savingEntry, setSavingEntry] = useState(false);
   const [editingVoucher, setEditingVoucher] = useState<any>(null);
   const [billAllocations, setBillAllocations] = useState<Record<number, number>>({});
+  // Har payment kis account se hua — Cash Box, HDFC, UPI etc.
+  const [accounts, setAccounts] = useState<BankAccount[]>([]);
 
   const calculateLiveBalance = async (): Promise<any[]> => {
     try {
@@ -283,6 +288,13 @@ function PaymentsLedger() {
 
   useEffect(() => {
     loadData();
+    loadBankAccounts().then((list) => {
+      setAccounts(list);
+      const preferred = defaultAccount(list);
+      if (preferred) {
+        setEntryForm((prev) => (prev.account_id ? prev : { ...prev, account_id: String(preferred.id) }));
+      }
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -445,6 +457,7 @@ function PaymentsLedger() {
       deduction: 0,
       amount: 0,
       payment_mode: "Bank / UPI",
+      account_id: entryForm.account_id,
       entry_date: new Date().toISOString().slice(0, 10),
       remarks: "",
     });
@@ -540,6 +553,7 @@ function PaymentsLedger() {
       deduction: disc,
       amount,
       payment_mode: r.payment_mode || r.mode || "Bank / UPI",
+      account_id: r.account_id ? String(r.account_id) : entryForm.account_id,
       entry_date: r.transaction_date || new Date().toISOString().slice(0, 10),
       remarks: r.remarks || "",
     });
@@ -584,7 +598,7 @@ function PaymentsLedger() {
     setEditingVoucher(null);
     setEntrySelectedIds([]);
     setBillAllocations({});
-    setEntryForm({ deduction: 0, amount: 0, payment_mode: "Bank / UPI", entry_date: new Date().toISOString().slice(0, 10), remarks: "" });
+    setEntryForm((prev) => ({ deduction: 0, amount: 0, payment_mode: "Bank / UPI", account_id: prev.account_id, entry_date: new Date().toISOString().slice(0, 10), remarks: "" }));
   };
 
   const deleteVoucher = async (r: any) => {
@@ -708,6 +722,7 @@ function PaymentsLedger() {
             debit_amount: 0,
             amount: amount,
             payment_mode: entryForm.payment_mode,
+          account_id: entryForm.account_id ? Number(entryForm.account_id) : null,
             remarks: entryForm.remarks || (deduction > 0 ? `Discount: ₹${deduction}` : ""),
           };
 
@@ -738,6 +753,7 @@ function PaymentsLedger() {
             debit_amount: amount,
             amount: amount,
             payment_mode: entryForm.payment_mode,
+          account_id: entryForm.account_id ? Number(entryForm.account_id) : null,
             remarks: entryForm.remarks || (deduction > 0 ? `Discount: ₹${deduction}` : ""),
           };
 
@@ -779,6 +795,7 @@ function PaymentsLedger() {
           debit_amount: 0,
           amount: amount,
           payment_mode: entryForm.payment_mode,
+          account_id: entryForm.account_id ? Number(entryForm.account_id) : null,
           remarks: entryForm.remarks || (deduction > 0 ? `Discount: ₹${deduction}` : ""),
         };
 
@@ -816,6 +833,7 @@ function PaymentsLedger() {
           debit_amount: amount,
           amount: amount,
           payment_mode: entryForm.payment_mode,
+          account_id: entryForm.account_id ? Number(entryForm.account_id) : null,
           remarks: entryForm.remarks || (deduction > 0 ? `Discount: ₹${deduction}` : ""),
         };
 
@@ -1383,6 +1401,23 @@ function PaymentsLedger() {
                     </div>
                   </div>
 
+                  {accounts.length > 0 && (
+                    <div style={{ marginBottom: 12 }}>
+                      <label style={labelStyle}>Account (किस अकाउंट में पैसा आया/गया) *</label>
+                      <select
+                        value={entryForm.account_id}
+                        onChange={(e) => setEntryForm({ ...entryForm, account_id: e.target.value })}
+                        style={modalInputStyle}
+                      >
+                        {accounts.map((a) => (
+                          <option key={a.id} value={a.id}>
+                            {a.name} ({a.account_type}){a.is_default ? " — default" : ""}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
                   <div style={{ marginBottom: 14 }}>
                     <label style={labelStyle}>Remarks / Note</label>
                     <input
@@ -1417,7 +1452,7 @@ function PaymentsLedger() {
                       onClick={() => {
                         setEntrySelectedIds([]);
                         setBillAllocations({});
-                        setEntryForm({ deduction: 0, amount: 0, payment_mode: "Bank / UPI", entry_date: new Date().toISOString().slice(0, 10), remarks: "" });
+                        setEntryForm((prev) => ({ deduction: 0, amount: 0, payment_mode: "Bank / UPI", account_id: prev.account_id, entry_date: new Date().toISOString().slice(0, 10), remarks: "" }));
                       }}
                       style={{ background: "#f1f5f9", color: "#475569", border: "none", padding: "10px 18px", borderRadius: 8, fontWeight: 600, cursor: "pointer" }}
                     >

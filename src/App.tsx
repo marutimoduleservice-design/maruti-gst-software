@@ -6,6 +6,7 @@ import { supabase } from "./lib/supabase";
 import { fmtDate } from "./lib/formatDate";
 import { computeProfitMonthly, profitTotals } from "./lib/profitCalc";
 import { computeStockValue } from "./lib/stockValue";
+import { isTransferRow } from "./lib/bankAccounts";
 import { currentFY } from "./lib/financialYear";
 import "./App.css";
 import Login from "./pages/Login";
@@ -205,6 +206,8 @@ function App() {
       }, 0);
 
       const totalExpenses = bankRows.reduce((s, r) => {
+        // Apne hi account ka transfer (Cash Box -> Bank) expense nahi hai.
+        if (isTransferRow(r)) return s;
         const type = String(r.transaction_type || r.type || "").toLowerCase();
         const particulars = String(r.particulars || "").toLowerCase();
         const out = Number(r.payment_out || r.debit_amount || r.amount) || 0;

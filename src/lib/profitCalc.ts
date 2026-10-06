@@ -1,6 +1,6 @@
 export type ProfitInvoice = { id: number; invoice_date: string | null; total_amount: number | null };
 export type ProfitJob = { job_date: string | null; repairing_quantity: number | null; warranty_quantity: number | null; reject_quantity?: number | null };
-export type ProfitBankRow = { transaction_date: string | null; created_at: string | null; amount: number | null; debit_amount: number | null; payment_out: number | null; payment_in: number | null; particulars: string | null; type: string | null; transaction_type: string | null };
+export type ProfitBankRow = { transaction_date: string | null; created_at: string | null; amount: number | null; debit_amount: number | null; payment_out: number | null; payment_in: number | null; particulars: string | null; type: string | null; transaction_type: string | null; is_transfer?: boolean | null };
 export type ProfitPurchase = { inward_no: string | null; purchase_no?: string | null; item_name: string | null; item_code?: string | null; rate: number | null; purchase_rate?: number | null; quantity: number | null };
 export type ProfitItem = { id: number; item_name: string | null; item_code: string | null; purchase_price: number | null; cost_price: number | null; opening_stock: number | null };
 export type ProfitLine = { invoice_id: number; inward_no: string | null; item_name: string | null; item_code?: string | null; quantity: number | null; cost_rate: number | null; total_cost?: number | null };
@@ -52,9 +52,12 @@ export const computeProfitMonthly = (data: {
     const personal = type.includes("owner drawing") || type.includes("personal") || particulars.includes("owner drawing") || particulars.includes("personal");
     const capital = type.includes("capital") || type.includes("deposit") || particulars.includes("capital") || particulars.includes("investment");
     const vendorPayment = type.includes("vendor payment") || type.includes("purchase payment") || particulars.includes("vendor payment") || particulars.includes("purchase payment") || particulars.includes("inw-");
+    // Apne hi account me transfer (Cash Box -> HDFC) na income hai na expense —
+    // warna har cash deposit profit kam kar degi.
+    const transfer = row.is_transfer === true || type.includes("account transfer");
     if (receipt) rows[index].deduction += toNumber(particulars.match(/\[disc:\s*₹([\d.]+)\]/i)?.[1]);
     if (personal) rows[index].personal += out;
-    if (!receipt && !personal && !capital && !vendorPayment && out > 0) rows[index].expense += out;
+    if (!receipt && !personal && !capital && !vendorPayment && !transfer && out > 0) rows[index].expense += out;
   });
   return rows.map((row) => ({ ...row, grossProfit: row.sale - row.cost - row.expense, netProfit: row.sale - row.cost - row.expense - row.deduction, saving: row.sale - row.cost - row.expense - row.deduction - row.personal }));
 };

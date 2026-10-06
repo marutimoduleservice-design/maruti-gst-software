@@ -2,6 +2,7 @@ import { sc } from "../lib/company";
 import { useEffect, useState, useMemo } from "react";
 import { fmtDate } from "../lib/formatDate";
 import { SortTh, useSortedRows } from "../lib/tableSort";
+import { isTransferRow } from "../lib/bankAccounts";
 
 type ExpenseItem = {
   id: number;
@@ -50,6 +51,10 @@ function ExpenseReport() {
       if (data && Array.isArray(data)) {
         // Strict filter to show ONLY pure expenses/manual outlays, excluding vendor purchases & customer receipts
         const pureExpenses = data.filter((row: any) => {
+          // Apne hi account se dusre account me paisa transfer (Cash Box -> Bank) —
+          // ye kharcha nahi hai, isliye expense me nahi aana chahiye.
+          if (isTransferRow(row)) return false;
+
           const part = String(row.particulars || row.notes || "").toLowerCase();
           const type = String(row.transaction_type || "").toLowerCase();
 

@@ -31,3 +31,26 @@ select indexname, indexdef
 from pg_indexes
 where schemaname = 'public' and tablename = 'warranty_returns'
 order by indexname;
+
+-- Aur ek seedha PASS/FAIL, taaki interpretation me confusion na ho:
+--
+--   'OK'  -> unique index nahi bacha, normal index bana hua hai
+--   'FAIL'-> abhi bhi koi UNIQUE index pada hua hai (same date ki do entry
+--             phir bhi block hogi)
+select case
+         when exists (
+           select 1 from pg_indexes
+            where schemaname = 'public'
+              and tablename = 'warranty_returns'
+              and indexdef ilike '%unique%'
+         )
+           then 'FAIL - abhi bhi UNIQUE index mojood hai'
+         when exists (
+           select 1 from pg_indexes
+            where schemaname = 'public'
+              and tablename = 'warranty_returns'
+              and indexname = 'warranty_returns_job_date_idx'
+         )
+           then 'OK - same-date ki multiple entries allowed hain'
+         else 'FAIL - warranty_returns_job_date_idx bhi nahi bana'
+       end as same_date_duplicates_allowed;

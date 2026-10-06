@@ -25,6 +25,7 @@ export const COMPANY_SCOPED_TABLES = new Set<string>([
   "job_cards",
   "job_card_technicians",
   "bank_transactions",
+  "bank_accounts",
   "warranty_claims",
   "warranty_returns",
   "customer_opening_balances",
