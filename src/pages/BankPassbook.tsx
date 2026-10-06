@@ -1166,6 +1166,20 @@ function BankPassbook() {
                             {t.transaction_type}
                           </span>
                         )}
+                        {/* Mode: paisa kis raaste se aaya/gaya — Cash, Cheque,
+                            NEFT/UPI. Pehle save hota tha par dikhta nahi tha. */}
+                        {!isDayTotal && t.payment_mode ? (
+                          <span
+                            style={{
+                              fontSize: 11,
+                              color: "#64748b",
+                              fontWeight: 500,
+                              marginLeft: 6,
+                            }}
+                          >
+                            · {t.payment_mode}
+                          </span>
+                        ) : null}
                       </td>
                       <td style={{ ...tdStyle, textAlign: "right", fontWeight: 700, color: "#16a34a" }}>
                         {num(t.payment_in) > 0 ? `₹ ${moneyPlain(num(t.payment_in))}` : ""}
