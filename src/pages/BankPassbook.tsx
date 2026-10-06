@@ -2,6 +2,7 @@ import { sc, getCompanyId } from "../lib/company";
 import { useEffect, useMemo, useState } from "react";
 import { fmtDate } from "../lib/formatDate";
 import { SortTh, useSortedRows } from "../lib/tableSort";
+import Reconciliation from "../components/Reconciliation";
 import { vendorPaymentParticularsWithPo } from "../lib/billAllocations";
 import type { BankAccount, BankTxn } from "../lib/bankAccounts";
 import {
@@ -63,6 +64,7 @@ function BankPassbook() {
   const [view, setView] = useState<"passbook" | "cashbook">("passbook");
   const [selectedAccountId, setSelectedAccountId] = useState<number>(0);
   const [showAccounts, setShowAccounts] = useState(false);
+  const [showRecon, setShowRecon] = useState(false);
   const [accountForm, setAccountForm] = useState(emptyAccountForm());
   const [accountError, setAccountError] = useState("");
 
@@ -523,6 +525,14 @@ function BankPassbook() {
 
   const showAccountColumn = selectedAccountId === 0 && view === "passbook";
 
+  if (showRecon) {
+    return (
+      <div style={{ width: "100%" }}>
+        <Reconciliation accounts={accounts} rows={bankRows} onClose={() => setShowRecon(false)} />
+      </div>
+    );
+  }
+
   return (
     <div style={{ width: "100%" }}>
       {/* HEADER */}
@@ -566,6 +576,9 @@ function BankPassbook() {
         </div>
 
         <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "flex-end" }}>
+          <button onClick={() => setShowRecon(true)} style={secondaryBtn}>
+            🔄 Reconciliation
+          </button>
           <button onClick={() => { setShowAccounts((v) => !v); setAccountError(""); }} style={secondaryBtn}>
             🏦 Manage Accounts
           </button>

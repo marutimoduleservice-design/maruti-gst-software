@@ -33,6 +33,8 @@ export const COMPANY_SCOPED_TABLES = new Set<string>([
   "company_settings",
   "technicians",
   "customer_item_prices",
+  "bank_statement_batches",
+  "bank_statement_lines",
 ]);
 
 export function getCompanyId(): number {
