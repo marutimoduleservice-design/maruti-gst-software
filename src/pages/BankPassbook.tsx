@@ -37,6 +37,8 @@ const emptyTxnForm = () => ({
   notes: "",
   amount: "",
   payment_mode: "Bank / UPI",
+  // Kaunsa account — khali matlab "jo bhi chuna hua hai" (preferred account).
+  account_id: "",
   transaction_date: today(),
 });
 
@@ -295,7 +297,15 @@ function BankPassbook() {
       alert("❌ कृपया सही राशि दर्ज करें!");
       return;
     }
-    const accountId = preferredAccount?.id;
+    // Account ka pehle se ye order hai:
+    //   1. Form me jo chuna (dropdown)
+    //   2. Screen par jo account dekh rahe hain (Cash Box dekh rahe hain to cash me daalo)
+    //   3. Default account
+    // Pehle sirf default use hota tha — isliye Cash Box select kar ke bhi entry
+    // bank account me chala jaata tha aur Cash Book khaali rehta tha.
+    const chosenInForm = Number(formData.account_id || 0);
+    const accountId =
+      chosenInForm || (selectedAccountId !== 0 ? selectedAccountId : 0) || preferredAccount?.id;
     if (!accountId) {
       alert("❌ Pehle koi bank account banaayein (Manage Accounts).");
       return;
@@ -899,7 +909,7 @@ function BankPassbook() {
                 />
               </div>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 12, alignItems: "end" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: 12, alignItems: "end" }}>
               <div>
                 <label style={labelStyle}>Date</label>
                 <input
@@ -910,10 +920,48 @@ function BankPassbook() {
                 />
               </div>
               <div>
+                <label style={labelStyle}>Account</label>
+                <select
+                  value={formData.account_id || String(selectedAccountId !== 0 ? selectedAccountId : preferredAccount?.id || "")}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    const acc = accounts.find((a) => String(a.id) === id);
+                    setFormData({
+                      ...formData,
+                      account_id: id,
+                      // Account hi asli hai — Mode uske hisaab se set karo, warna
+                      // "Cash" chun ke bhi entry bank account me chali jayegi.
+                      payment_mode: acc ? (isCashAccount(acc) ? "Cash" : "Bank / UPI") : formData.payment_mode,
+                    });
+                  }}
+                  style={inputStyle}
+                >
+                  {accounts.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name} ({a.account_type}){a.is_default ? " — default" : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
                 <label style={labelStyle}>Mode</label>
                 <select
                   value={formData.payment_mode}
-                  onChange={(e) => setFormData({ ...formData, payment_mode: e.target.value })}
+                  onChange={(e) => {
+                    const mode = e.target.value;
+                    setFormData((prev) => {
+                      // Mode = Cash aur account cash type ka nahi hai → cash
+                      // account par le jaao, warna Cash Book me entry dikhegi hi nahi.
+                      if (mode === "Cash") {
+                        const cur = accounts.find((a) => String(a.id) === prev.account_id);
+                        if (!isCashAccount(cur)) {
+                          const cashAcc = accounts.find((a) => isCashAccount(a));
+                          if (cashAcc) return { ...prev, payment_mode: mode, account_id: String(cashAcc.id) };
+                        }
+                      }
+                      return { ...prev, payment_mode: mode };
+                    });
+                  }}
                   style={inputStyle}
                 >
                   <option>Bank / UPI</option>

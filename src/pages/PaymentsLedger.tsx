@@ -9,7 +9,7 @@ import {
   type AllocBill,
 } from "../lib/billAllocations";
 import type { BankAccount } from "../lib/bankAccounts";
-import { defaultAccount, loadBankAccounts } from "../lib/bankAccounts";
+import { defaultAccount, isCashAccount, loadBankAccounts } from "../lib/bankAccounts";
 
 type Vendor = {
   id: number;
@@ -1381,7 +1381,22 @@ function PaymentsLedger() {
                       <label style={labelStyle}>Mode *</label>
                       <select
                         value={entryForm.payment_mode}
-                        onChange={(e) => setEntryForm({ ...entryForm, payment_mode: e.target.value })}
+                        onChange={(e) => {
+                          const mode = e.target.value;
+                          setEntryForm((prev) => {
+                            // Mode = Cash lekin account bank wala hai → cash account
+                            // par le jaao. Warna receipt banegi to Cash Book me
+                            // dikhegi hi nahi, sirf Passbook me.
+                            if (mode === "Cash") {
+                              const cur = accounts.find((a) => String(a.id) === prev.account_id);
+                              if (!isCashAccount(cur)) {
+                                const cashAcc = accounts.find((a) => isCashAccount(a));
+                                if (cashAcc) return { ...prev, payment_mode: mode, account_id: String(cashAcc.id) };
+                              }
+                            }
+                            return { ...prev, payment_mode: mode };
+                          });
+                        }}
                         style={modalInputStyle}
                       >
                         <option value="Bank / UPI">Bank / UPI</option>
@@ -1406,7 +1421,18 @@ function PaymentsLedger() {
                       <label style={labelStyle}>Account (किस अकाउंट में पैसा आया/गया) *</label>
                       <select
                         value={entryForm.account_id}
-                        onChange={(e) => setEntryForm({ ...entryForm, account_id: e.target.value })}
+                        onChange={(e) => {
+                          const id = e.target.value;
+                          const acc = accounts.find((a) => String(a.id) === id);
+                          setEntryForm({
+                            ...entryForm,
+                            account_id: id,
+                            // Account hi source of truth — Mode uske hisaab se.
+                            payment_mode: acc
+                              ? isCashAccount(acc) ? "Cash" : "Bank / UPI"
+                              : entryForm.payment_mode,
+                          });
+                        }}
                         style={modalInputStyle}
                       >
                         {accounts.map((a) => (
