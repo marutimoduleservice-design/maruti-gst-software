@@ -859,14 +859,113 @@ function BankPassbook() {
         </div>
       </div>
 
+      {/* ACCOUNT-WISE LIVE BALANCES — har account ka current paisa, aur total */}
+      <div style={{ ...panelStyle, marginBottom: 18 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginBottom: 10,
+          }}
+        >
+          <span style={{ fontSize: 13, fontWeight: 700, color: "#0f172a" }}>
+            Account-wise Live Balance
+          </span>
+          <span style={{ fontSize: 12, color: "#64748b" }}>
+            Total Live{" "}
+            <strong style={{ color: grandTotal >= 0 ? "#0f172a" : "#be123c" }}>
+              ₹ {grandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
+            </strong>
+          </span>
+        </div>
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
+            gap: 10,
+          }}
+        >
+          {perAccount
+            .filter((row) => row.account.active)
+            .map(({ account, balance, count }) => {
+              const isSelected = selectedAccountId === account.id;
+              return (
+                <button
+                  key={account.id}
+                  type="button"
+                  onClick={() => setSelectedAccountId(isSelected ? 0 : account.id)}
+                  title={isSelected ? "All Accounts par wapas jaayein" : "Sirf ye account dekhein"}
+                  style={{
+                    textAlign: "left",
+                    padding: "10px 12px",
+                    borderRadius: 10,
+                    border: isSelected ? "2px solid #2563eb" : "1px solid #e2e8f0",
+                    background: isSelected ? "#eff6ff" : "#fff",
+                    cursor: "pointer",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: 8,
+                  }}
+                >
+                  <span style={{ minWidth: 0 }}>
+                    <span
+                      style={{
+                        display: "block",
+                        fontSize: 12,
+                        fontWeight: 700,
+                        color: "#0f172a",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {account.name}
+                    </span>
+                    <span
+                      style={{
+                        display: "block",
+                        fontSize: 11,
+                        color: isCashAccount(account) ? "#16a34a" : "#475569",
+                      }}
+                    >
+                      {account.account_type} · {count} txn
+                    </span>
+                  </span>
+                  <strong
+                    style={{
+                      fontSize: 15,
+                      color: balance >= 0 ? "#0f172a" : "#be123c",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    ₹ {balance.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
+                  </strong>
+                </button>
+              );
+            })}
+        </div>
+      </div>
+
       {/* NEW TRANSACTION + TRANSFER FORMS */}
       <div style={{ display: "grid", gridTemplateColumns: view === "cashbook" ? "1fr" : "1.25fr 1fr", gap: 16, marginBottom: 18 }}>
         <div style={panelStyle}>
           <h3 style={{ margin: "0 0 4px", fontSize: 15, fontWeight: 700, color: "#ea580c" }}>
-            💰 नई Entry — {preferredAccount ? preferredAccount.name : "कोई अकाउंट नहीं"}
+            💰 नई Entry —{" "}
+            {(() => {
+              const inForm = accounts.find(
+                (a) => String(a.id) === String(formData.account_id || "")
+              );
+              const shown =
+                inForm || accounts.find((a) => a.id === selectedAccountId) || preferredAccount;
+              return shown ? shown.name : "कोई अकाउंट नहीं";
+            })()}
           </h3>
           <p style={{ margin: "0 0 14px", fontSize: 12, color: "#64748b" }}>
-            Cash की entry Cash Box में, bank की HDFC में — account ऊपर dropdown से बदल सकते हैं।
+            नीचे Account चुनें — Cash चुनते ही यह entry Cash Box में जाएगी और Cash Book वहीं
+            दिखेगी। ऊपर जो account खुला है, यही उसमें लिखी जाएगी।
           </p>
 
           <form onSubmit={handleSaveTransaction}>
