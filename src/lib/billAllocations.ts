@@ -1,3 +1,5 @@
+import { isBounced } from "./bankAccounts";
+
 /**
  * Vendor payment vouchers se bill allocation ka shared logic.
  *
@@ -34,6 +36,9 @@ export const buildAllocations = (bills: AllocBill[], rows: any[]): Map<number, B
   const refs = bills.map((b) => b.ref).filter(Boolean);
 
   rows.forEach((row: any) => {
+    // Bounced / returned payment bill ko settle nahi karta — udhaar wapas
+    // outstanding ho jaata hai, isliye allocation me count hi mat karo.
+    if (isBounced(row)) return;
     const particulars = String(row.particulars || "");
     if (!particulars) return;
 

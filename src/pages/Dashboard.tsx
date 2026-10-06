@@ -25,7 +25,9 @@ const Dashboard = () => {
 
       const { data: invoices } = await sc("invoices").select('*');
       const { data: purchases } = await sc("purchases").select('*');
-      const { data: expenses } = await sc("bank_transactions").select('*');
+      const { data: expensesRaw } = await sc("bank_transactions").select('*');
+      // Bounced/returned rows paisa nahi — profit aur expense se exclude.
+      const expenses = expensesRaw?.filter((row: any) => !row.bounced_at) || [];
       const { data: customers } = await sc("customers").select('*').limit(5);
       const { data: invoiceLines } = await sc("invoice_items").select('*');
       const { data: jobCards } = await sc("job_cards").select('*');

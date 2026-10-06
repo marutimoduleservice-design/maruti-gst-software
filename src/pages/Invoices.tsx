@@ -557,7 +557,10 @@ if (repStats.pending > 0) {
         .select("*")
         .or(`particulars.ilike.%${targetInvNo}%,notes.ilike.%${targetInvNo}%`);
 
-      if (!payError && paymentCheck && paymentCheck.length > 0) {
+      // Bounced/returned receipt customer ka payment nahi — invoice phir se
+      // edit honi chahiye.
+      const livePayments = (paymentCheck || []).filter((r: any) => !r.bounced_at);
+      if (!payError && livePayments.length > 0) {
         alert("❌ Error: Is invoice ka payment/receipt pehle hi ho chuka hai, isliye ab yeh invoice edit nahi kiya ja sakta!");
         return;
       }
@@ -730,11 +733,13 @@ const handleDeleteInvoice = async (inv: Invoice) => {
         const currentInv = invoices.find(i => i.id === editingInvoiceId);
         if (currentInv) {
           const { data: finalCheck } = await sc("bank_transactions")
-            .select("id")
+            .select("id, bounced_at")
             .or(`particulars.ilike.%${currentInv.invoice_no}%,notes.ilike.%${currentInv.invoice_no}%`)
-            .limit(1);
+            .limit(5);
 
-          if (finalCheck && finalCheck.length > 0) {
+          // Bounced receipt asli payment nahi — edit block mat karo.
+          const liveCheck = (finalCheck || []).filter((r: any) => !r.bounced_at);
+          if (liveCheck.length > 0) {
             setSaving(false);
             alert("❌ Error: Is invoice ka payment ho chuka hai, update karna allowed nahi hai!");
             return;

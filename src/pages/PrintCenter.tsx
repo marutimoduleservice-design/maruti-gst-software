@@ -235,7 +235,8 @@ function PrintCenter() {
         const invoiceItemsData = iiRes.data || [];
         const customersData = cRes.data || [];
         const vendorsData = vRes.data || [];
-        const bankRows = btRes.data || [];
+        // Bounced/returned rows ko ledgers/statements me count mat karo.
+        const bankRows = (btRes.data || []).filter((r: any) => !r.bounced_at);
 
         const customerById = new Map<number, any>(customersData.map((c: any) => [Number(c.id), c]));
         const receiptRows = bankRows.filter((r: any) => {

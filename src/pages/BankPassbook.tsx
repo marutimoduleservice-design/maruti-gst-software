@@ -9,6 +9,7 @@ import {
   TRANSFER_TYPE,
   accountTotals,
   defaultAccount,
+  isBounced,
   isCashAccount,
   loadBankAccounts,
   num,
@@ -208,8 +209,11 @@ function BankPassbook() {
         dayIn = 0;
         dayOut = 0;
       }
-      dayIn += num(row.payment_in);
-      dayOut += num(row.payment_out);
+      // Bounce/return row ka paisa din ke total me nahi jaata.
+      if (!isBounced(row)) {
+        dayIn += num(row.payment_in);
+        dayOut += num(row.payment_out);
+      }
       dayRows.push(row);
     });
     flushDay();
@@ -220,7 +224,7 @@ function BankPassbook() {
     () =>
       ledgerRows.reduce(
         (acc, t) =>
-          t._kind === "daytotal"
+          t._kind === "daytotal" || isBounced(t)
             ? acc
             : { totalIn: acc.totalIn + num(t.payment_in), totalOut: acc.totalOut + num(t.payment_out) },
         { totalIn: 0, totalOut: 0 }
@@ -1289,6 +1293,24 @@ function BankPassbook() {
                             }}
                           >
                             · {t.payment_mode}
+                          </span>
+                        ) : null}
+                        {/* Bounce/return: paisa hua nahi — balance isko
+                            ignore karta hai, par row dikhti rahe. */}
+                        {!isDayTotal && isBounced(t) ? (
+                          <span
+                            title={t.bounce_reason || "Payment bounced / returned"}
+                            style={{
+                              marginLeft: 6,
+                              fontSize: 10,
+                              background: "#fee2e2",
+                              color: "#b91c1c",
+                              padding: "1px 6px",
+                              borderRadius: 4,
+                              fontWeight: 800,
+                            }}
+                          >
+                            ↩ BOUNCED
                           </span>
                         ) : null}
                       </td>

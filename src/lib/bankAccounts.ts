@@ -44,12 +44,29 @@ export type BankTxn = {
   remarks?: string | null;
   is_transfer?: boolean | null;
   transfer_to_account_id?: number | null;
+  cheque_no?: string | null;
+  cheque_date?: string | null;
+  utr_no?: string | null;
+  bounce_reason?: string | null;
+  bounced_at?: string | null;
 };
 
 export const num = (value: unknown) => (Number.isFinite(Number(value)) ? Number(value) : 0);
 
 /** Apne account se dusre account me transfer — income/expense nahi hota. */
 export const TRANSFER_TYPE = "Account Transfer (+/-)";
+
+/**
+ * Payment bounce / cheque return. `bounced_at` non-null hone ka matlab paisa
+ * bank se kabhi bahar hi nahi gaya — isliye balance, expense, profit aur bill
+ * allocation ki har calculation me ye row exclude hoti hai. Row passbook /
+ * ledger me dikhti zaroor hai (badge ke saath), sirf hisaab me nahi aati.
+ *
+ * Migration se pehle column hi nahi hota, tab `undefined` → false, behaviour
+ * bilkul waisi hi rehti hai jaise aaj hai.
+ */
+export const isBounced = (row: { bounced_at?: string | null } | null | undefined): boolean =>
+  Boolean(row && row.bounced_at);
 
 export function isTransferRow(row: BankTxn): boolean {
   return row.is_transfer === true || String(row.transaction_type || "").trim() === TRANSFER_TYPE;
@@ -107,11 +124,12 @@ export function accountTotals(accounts: BankAccount[], rows: BankTxn[]) {
     if (!accountId) return; // orphan row — kisi account me count nahi hoga
     const bucket = map.get(accountId);
     if (!bucket) return;
+    bucket.count += 1;
+    if (isBounced(row)) return; // bounce = paisa hila hi nahi, balance me nahi
     const { pIn, pOut } = resolveInOut(row);
     bucket.inTotal += pIn;
     bucket.outTotal += pOut;
     bucket.balance += pIn - pOut;
-    bucket.count += 1;
   });
 
   return map;
@@ -124,6 +142,9 @@ export function accountTotals(accounts: BankAccount[], rows: BankTxn[]) {
 export function withRunningBalance(rows: BankTxn[], openingBalance = 0): BankTxn[] {
   let running = openingBalance;
   return rows.map((row) => {
+    // Bounced row: amount dikhega (aur badge bhi), par running balance
+    // wahi ka wahi rehta hai — paisa bahar gaya hi nahi tha.
+    if (isBounced(row)) return { ...row, running_balance: running };
     const { pIn, pOut } = resolveInOut(row);
     running += pIn - pOut;
     return { ...row, payment_in: pIn, payment_out: pOut, running_balance: running };

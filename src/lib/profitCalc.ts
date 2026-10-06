@@ -1,6 +1,6 @@
 export type ProfitInvoice = { id: number; invoice_date: string | null; total_amount: number | null };
 export type ProfitJob = { job_date: string | null; repairing_quantity: number | null; warranty_quantity: number | null; reject_quantity?: number | null };
-export type ProfitBankRow = { transaction_date: string | null; created_at: string | null; amount: number | null; debit_amount: number | null; payment_out: number | null; payment_in: number | null; particulars: string | null; type: string | null; transaction_type: string | null; is_transfer?: boolean | null };
+export type ProfitBankRow = { transaction_date: string | null; created_at: string | null; amount: number | null; debit_amount: number | null; payment_out: number | null; payment_in: number | null; particulars: string | null; type: string | null; transaction_type: string | null; is_transfer?: boolean | null; bounced_at?: string | null };
 export type ProfitPurchase = { inward_no: string | null; purchase_no?: string | null; item_name: string | null; item_code?: string | null; rate: number | null; purchase_rate?: number | null; quantity: number | null };
 export type ProfitItem = { id: number; item_name: string | null; item_code: string | null; purchase_price: number | null; cost_price: number | null; opening_stock: number | null };
 export type ProfitLine = { invoice_id: number; inward_no: string | null; item_name: string | null; item_code?: string | null; quantity: number | null; cost_rate: number | null; total_cost?: number | null };
@@ -44,6 +44,9 @@ export const computeProfitMonthly = (data: {
   lines.forEach((line) => { const index = monthPosition(invoiceMap.get(line.invoice_id)?.invoice_date, startYear); if (index >= 0) rows[index].cost += toNumber(line.quantity) * rateFor(line); });
   jobs.forEach((job) => { const index = monthPosition(job.job_date, startYear); if (index >= 0) { rows[index].repairQty += toNumber(job.repairing_quantity); rows[index].warrantyQty += toNumber(job.warranty_quantity); } });
   bankRows.forEach((row) => {
+    // Bounced/returned payment expense, personal aur deduction — kuch bhi
+    // nahi tha; paisa hua hi nahi, isliye poori row skip.
+    if (row.bounced_at) return;
     const index = monthPosition(row.transaction_date || row.created_at, startYear); if (index < 0) return;
     const type = String(row.transaction_type || row.type || "").toLowerCase();
     const particulars = String(row.particulars || "").toLowerCase();

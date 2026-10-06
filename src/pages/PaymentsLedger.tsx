@@ -9,7 +9,7 @@ import {
   type AllocBill,
 } from "../lib/billAllocations";
 import type { BankAccount } from "../lib/bankAccounts";
-import { defaultAccount, isCashAccount, loadBankAccounts } from "../lib/bankAccounts";
+import { defaultAccount, isBounced, isCashAccount, loadBankAccounts } from "../lib/bankAccounts";
 
 type Vendor = {
   id: number;
@@ -121,9 +121,14 @@ function PaymentsLedger() {
     account_id: "",
     entry_date: new Date().toISOString().slice(0, 10),
     remarks: "",
+    cheque_no: "",
+    cheque_date: "",
+    utr_no: "",
   });
   const [savingEntry, setSavingEntry] = useState(false);
   const [editingVoucher, setEditingVoucher] = useState<any>(null);
+  // Chhoti report: sabhi bounced/returned payments ek jagah
+  const [showBounceList, setShowBounceList] = useState(false);
   const [billAllocations, setBillAllocations] = useState<Record<number, number>>({});
   // Har payment kis account se hua — Cash Box, HDFC, UPI etc.
   const [accounts, setAccounts] = useState<BankAccount[]>([]);
@@ -140,6 +145,8 @@ function PaymentsLedger() {
 
       if (rows.length) {
         rows.forEach((row: any) => {
+          // Bounce/return: paisa account me aaya/gya hi nahi — balance me mat lo.
+          if (isBounced(row)) return;
           const rawAmt = Number(row.amount || 0);
           let pIn = Number(row.payment_in ?? row.credit_amount ?? 0);
           let pOut = Number(row.payment_out ?? row.debit_amount ?? 0);
@@ -460,6 +467,9 @@ function PaymentsLedger() {
       account_id: entryForm.account_id,
       entry_date: new Date().toISOString().slice(0, 10),
       remarks: "",
+      cheque_no: "",
+      cheque_date: "",
+      utr_no: "",
     });
   };
 
@@ -556,6 +566,9 @@ function PaymentsLedger() {
       account_id: r.account_id ? String(r.account_id) : entryForm.account_id,
       entry_date: r.transaction_date || new Date().toISOString().slice(0, 10),
       remarks: r.remarks || "",
+      cheque_no: r.cheque_no || "",
+      cheque_date: r.cheque_date ? String(r.cheque_date).slice(0, 10) : "",
+      utr_no: r.utr_no || "",
     });
 
     const particulars = String(r.particulars || "");
@@ -598,7 +611,7 @@ function PaymentsLedger() {
     setEditingVoucher(null);
     setEntrySelectedIds([]);
     setBillAllocations({});
-    setEntryForm((prev) => ({ deduction: 0, amount: 0, payment_mode: "Bank / UPI", account_id: prev.account_id, entry_date: new Date().toISOString().slice(0, 10), remarks: "" }));
+    setEntryForm((prev) => ({ deduction: 0, amount: 0, payment_mode: "Bank / UPI", account_id: prev.account_id, entry_date: new Date().toISOString().slice(0, 10), remarks: "", cheque_no: "", cheque_date: "", utr_no: "" }));
   };
 
   const deleteVoucher = async (r: any) => {
@@ -629,6 +642,111 @@ function PaymentsLedger() {
     } finally {
       setSavingEntry(false);
     }
+  };
+
+  // ─── BOUNCE / RETURN ──────────────────────────────────────
+  // Cheque dishonour / payment wapas aana. Row par `bounced_at` set hote hi
+  // buildAllocations, balance aur profit calculations us row ko ignore kar
+  // dete hain — bill dobara outstanding ho jaata hai (udhaar wapas).
+  const bouncedVouchers = useMemo(
+    () =>
+      bankRows
+        .filter((r: any) => isBounced(r))
+        .sort((a: any, b: any) =>
+          String(b.bounced_at || "").localeCompare(String(a.bounced_at || ""))
+        ),
+    [bankRows]
+  );
+
+  const bounceVoucher = async (r: any) => {
+    const label =
+      activeTab === "Customers"
+        ? r.transaction_no || r.reference_no || `RC-${r.id}`
+        : r.transaction_no || `PM-${r.id}`;
+    const amount = voucherAmount(r);
+    const reason = prompt(
+      `↩ BOUNCE / RETURN\n\n"${label}" (${money(amount)}) — ${r.party_name || "party"}\n\nYe payment dishonour hui hai. Reason likhein (उदा. "Cheque Bounce - Insufficient Funds"):`
+    );
+    if (reason === null) return;
+    setSavingEntry(true);
+    try {
+      const { error } = await sc("bank_transactions")
+        .update({
+          bounced_at: new Date().toISOString(),
+          bounce_reason: reason.trim() || "Bounced / Returned",
+        })
+        .eq("id", r.id);
+      if (error) throw error;
+
+      if (activeTab === "Vendors" && selectedPartyId) {
+        await recomputeVendorStatuses(Number(selectedPartyId));
+      }
+      await loadData();
+      alert(
+        `↩ ${label} bounce mark हो गया.\n\nPaisa balance me wapas aa gaya aur bill dubara pending (outstanding) dikhega.`
+      );
+    } catch (err: any) {
+      console.error("Bounce error:", err);
+      alert("❌ Error: " + err.message);
+    } finally {
+      setSavingEntry(false);
+    }
+  };
+
+  const undoBounceVoucher = async (r: any) => {
+    const label =
+      activeTab === "Customers"
+        ? r.transaction_no || r.reference_no || `RC-${r.id}`
+        : r.transaction_no || `PM-${r.id}`;
+    if (
+      !confirm(
+        `↩ Undo Bounce\n\n"${label}" ko wapas normal payment maanein?\n\nYe tab karein jabki galati se bounce lag gaya ho — payment actually clear ho chuka hai.`
+      )
+    )
+      return;
+    setSavingEntry(true);
+    try {
+      const { error } = await sc("bank_transactions")
+        .update({ bounced_at: null, bounce_reason: null })
+        .eq("id", r.id);
+      if (error) throw error;
+
+      if (activeTab === "Vendors" && selectedPartyId) {
+        await recomputeVendorStatuses(Number(selectedPartyId));
+      }
+      await loadData();
+      alert(`✅ ${label} wapas normal payment ban gaya.`);
+    } catch (err: any) {
+      console.error("Undo bounce error:", err);
+      alert("❌ Error: " + err.message);
+    } finally {
+      setSavingEntry(false);
+    }
+  };
+
+  const printBounceList = () => {
+    if (bouncedVouchers.length === 0) {
+      alert("कोई bounced/returned payment नहीं मिली।");
+      return;
+    }
+    const rows = bouncedVouchers
+      .map(
+        (r: any) =>
+          `<tr><td>${formatLedgerDate(r.transaction_date || r.created_at)}</td><td>${r.transaction_no || `PM-${r.id}`}</td><td>${r.party_name || "-"}</td><td>${r.payment_mode || "-"}</td><td>${r.cheque_no || "-"}</td><td>${r.utr_no || "-"}</td><td class="right">${money(voucherAmount(r))}</td><td>${r.bounce_reason || "-"}</td><td>${formatLedgerDate(String(r.bounced_at || "").slice(0, 10))}</td></tr>`
+      )
+      .join("");
+    const total = bouncedVouchers.reduce((s: number, r: any) => s + voucherAmount(r), 0);
+    const generatedAt = new Date().toLocaleString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
+    const html = `<!doctype html><html><head><title>Cheque Bounce List</title><style>body{font-family:Arial,sans-serif;color:#172033;margin:30px}h1{margin:0 0 4px;color:#0f172a}h2{margin:0 0 18px;color:#475569;font-size:15px}p{margin:5px 0;color:#475569}.summary{display:flex;gap:24px;margin:20px 0;padding:14px;background:#fef2f2;border:1px solid #fca5a5}.summary b{display:block;color:#b91c1c;margin-top:4px}.right{text-align:right}table{width:100%;border-collapse:collapse;margin-top:18px}th,td{border:1px solid #cbd5e1;padding:9px;font-size:12px}th{background:#fee2e2;text-align:left}@media print{body{margin:12mm}}</style></head><body><h1>MARUTI MODULE SERVICE</h1><h2>Cheque Bounce / Returned Payments</h2><p><b>Report Generated:</b> ${generatedAt}</p><div class="summary"><div>Bounced Payments<b>${bouncedVouchers.length}</b></div><div>Total Amount<b>${money(total)}</b></div></div><table><thead><tr><th>Date</th><th>Voucher No</th><th>Party</th><th>Mode</th><th>Cheque No</th><th>UTR</th><th class="right">Amount (₹)</th><th>Reason</th><th>Bounced On</th></tr></thead><tbody>${rows}</tbody></table><p style="margin-top:24px">This is a computer-generated statement.</p></body></html>`;
+    const printWindow = window.open("", "_blank", "width=1100,height=800");
+    if (!printWindow) {
+      alert("Print window block ho gaya. Browser pop-up allow karein.");
+      return;
+    }
+    printWindow.document.write(html);
+    printWindow.document.close();
+    printWindow.focus();
+    setTimeout(() => printWindow.print(), 300);
   };
 
   const handleSaveEntry = async (e: React.FormEvent) => {
@@ -697,6 +815,14 @@ function PaymentsLedger() {
       return;
     }
 
+    // Payment proof: Cheque no/date sirf Cheque mode me, UTR har paisa-wale
+    // (non-Cash) mode me. Jo field applicable nahi hai wo NULL save hota hai.
+    const payDetails = {
+      cheque_no: entryForm.payment_mode === "Cheque" ? entryForm.cheque_no.trim() || null : null,
+      cheque_date: entryForm.payment_mode === "Cheque" ? entryForm.cheque_date || null : null,
+      utr_no: entryForm.payment_mode !== "Cash" ? entryForm.utr_no.trim() || null : null,
+    };
+
     setSavingEntry(true);
     try {
       if (editingVoucher) {
@@ -724,6 +850,7 @@ function PaymentsLedger() {
             payment_mode: entryForm.payment_mode,
           account_id: entryForm.account_id ? Number(entryForm.account_id) : null,
             remarks: entryForm.remarks || (deduction > 0 ? `Discount: ₹${deduction}` : ""),
+            ...payDetails,
           };
 
           const { error: updErr } = await sc("bank_transactions")
@@ -755,6 +882,7 @@ function PaymentsLedger() {
             payment_mode: entryForm.payment_mode,
           account_id: entryForm.account_id ? Number(entryForm.account_id) : null,
             remarks: entryForm.remarks || (deduction > 0 ? `Discount: ₹${deduction}` : ""),
+            ...payDetails,
           };
 
           const { error: updErr } = await sc("bank_transactions")
@@ -797,6 +925,7 @@ function PaymentsLedger() {
           payment_mode: entryForm.payment_mode,
           account_id: entryForm.account_id ? Number(entryForm.account_id) : null,
           remarks: entryForm.remarks || (deduction > 0 ? `Discount: ₹${deduction}` : ""),
+          ...payDetails,
         };
 
         const { error: bankErr } = await sc("bank_transactions").insert([receiptRecord]);
@@ -835,6 +964,7 @@ function PaymentsLedger() {
           payment_mode: entryForm.payment_mode,
           account_id: entryForm.account_id ? Number(entryForm.account_id) : null,
           remarks: entryForm.remarks || (deduction > 0 ? `Discount: ₹${deduction}` : ""),
+          ...payDetails,
         };
 
         const { error: bankErr } = await sc("bank_transactions").insert([passbookRecord]);
@@ -894,6 +1024,7 @@ function PaymentsLedger() {
       }
       const invoiceNumbers = new Set(partyInvoices.map((i) => i.invoice_no));
       const relevantReceipts = bankRows.filter((row: any) =>
+        !isBounced(row) &&
         [...invoiceNumbers].some((no) => String(row.particulars || "").includes(String(no))) &&
         String(row.transaction_date || "") >= from &&
         String(row.transaction_date || "") <= to
@@ -937,6 +1068,7 @@ function PaymentsLedger() {
     const label = selectedParty?.name || "All Vendors";
     const billNumbers = new Set(partyBills.map((p) => p.inward_no));
     const relevantPayments = bankRows.filter((row: any) =>
+      !isBounced(row) &&
       [...billNumbers].some((no) => String(row.particulars || "").includes(String(no))) &&
       String(row.transaction_date || "") >= from &&
       String(row.transaction_date || "") <= to &&
@@ -1010,6 +1142,23 @@ function PaymentsLedger() {
             <span style={{ fontSize: 11, color: "#64748b", display: "block", fontWeight: 700 }}>🏦 Live Passbook Balance</span>
             <strong style={{ fontSize: 15, color: availableBalance > 0 ? "#15803d" : "#b91c1c" }}>{money(availableBalance)}</strong>
           </div>
+
+          <button
+            onClick={() => setShowBounceList(true)}
+            title="Cheque Bounce / Returned payments list"
+            style={{
+              background: bouncedVouchers.length > 0 ? "#fef2f2" : "#f8fafc",
+              color: bouncedVouchers.length > 0 ? "#b91c1c" : "#475569",
+              border: `2px solid ${bouncedVouchers.length > 0 ? "#fca5a5" : "#e2e8f0"}`,
+              padding: "8px 12px",
+              borderRadius: 8,
+              fontWeight: 700,
+              fontSize: 12,
+              cursor: "pointer",
+            }}
+          >
+            ⚠️ Bounce List{bouncedVouchers.length > 0 ? ` (${bouncedVouchers.length})` : ""}
+          </button>
 
           <button
             onClick={() => loadData()}
@@ -1428,8 +1577,15 @@ function PaymentsLedger() {
                             ...entryForm,
                             account_id: id,
                             // Account hi source of truth — Mode uske hisaab se.
+                            // Par Cash ke alawa kisi bhi account par Cheque mode
+                            // barqarar rakho, warna cheque no/date bharte-bharte
+                            // mode wapas "Bank / UPI" ho jaayega.
                             payment_mode: acc
-                              ? isCashAccount(acc) ? "Cash" : "Bank / UPI"
+                              ? isCashAccount(acc)
+                                ? "Cash"
+                                : entryForm.payment_mode === "Cheque"
+                                  ? "Cheque"
+                                  : "Bank / UPI"
                               : entryForm.payment_mode,
                           });
                         }}
@@ -1441,6 +1597,48 @@ function PaymentsLedger() {
                           </option>
                         ))}
                       </select>
+                    </div>
+                  )}
+
+                  {/* Payment proof: Cheque mode me cheque no/date, har
+                      paisa-wale (non-Cash) mode me UTR — bina UTR ke bank
+                      transfer ka proof nahi milta. */}
+                  {entryForm.payment_mode === "Cheque" && (
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+                      <div>
+                        <label style={labelStyle}>Cheque No.</label>
+                        <input
+                          type="text"
+                          placeholder="उदा. 123456"
+                          value={entryForm.cheque_no}
+                          onChange={(e) => setEntryForm({ ...entryForm, cheque_no: e.target.value })}
+                          style={modalInputStyle}
+                        />
+                      </div>
+                      <div>
+                        <label style={labelStyle}>Cheque Date</label>
+                        <input
+                          type="date"
+                          value={entryForm.cheque_date}
+                          onChange={(e) => setEntryForm({ ...entryForm, cheque_date: e.target.value })}
+                          style={modalInputStyle}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {entryForm.payment_mode !== "Cash" && (
+                    <div style={{ marginBottom: 12 }}>
+                      <label style={labelStyle}>
+                        UTR / Transaction Ref No. {activeTab === "Vendors" ? "(bank transfer proof)" : "(received payment proof)"}
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="उदा. 225012345678 (UPI / NEFT / IMPS / RTGS reference)"
+                        value={entryForm.utr_no}
+                        onChange={(e) => setEntryForm({ ...entryForm, utr_no: e.target.value })}
+                        style={modalInputStyle}
+                      />
                     </div>
                   )}
 
@@ -1478,7 +1676,7 @@ function PaymentsLedger() {
                       onClick={() => {
                         setEntrySelectedIds([]);
                         setBillAllocations({});
-                        setEntryForm((prev) => ({ deduction: 0, amount: 0, payment_mode: "Bank / UPI", account_id: prev.account_id, entry_date: new Date().toISOString().slice(0, 10), remarks: "" }));
+                        setEntryForm((prev) => ({ deduction: 0, amount: 0, payment_mode: "Bank / UPI", account_id: prev.account_id, entry_date: new Date().toISOString().slice(0, 10), remarks: "", cheque_no: "", cheque_date: "", utr_no: "" }));
                       }}
                       style={{ background: "#f1f5f9", color: "#475569", border: "none", padding: "10px 18px", borderRadius: 8, fontWeight: 600, cursor: "pointer" }}
                     >
@@ -1528,6 +1726,7 @@ function PaymentsLedger() {
                           <SortTh label="Serial No" active={vSort.key === "serial_no"} dir={vSort.dir} onToggle={() => vSort.toggle("serial_no")} style={thStyle} />
                           <SortTh label="Amount (₹)" active={vSort.key === "amount"} dir={vSort.dir} onToggle={() => vSort.toggle("amount")} style={{ ...thStyle, textAlign: "right" }} align="right" />
                           <SortTh label="Mode" active={vSort.key === "mode"} dir={vSort.dir} onToggle={() => vSort.toggle("mode")} style={thStyle} />
+                          <th style={thStyle}>Ref (Cheque / UTR)</th>
                           <th style={{ ...thStyle, textAlign: "center" }}>Action</th>
                         </tr>
                       </thead>
@@ -1539,25 +1738,66 @@ function PaymentsLedger() {
                               {activeTab === "Customers"
                                 ? r.transaction_no || r.reference_no || `RC-${r.id}`
                                 : r.transaction_no || `PM-${r.id}`}
+                              {r.bounced_at ? (
+                                <span
+                                  title={r.bounce_reason || "Bounced / Returned"}
+                                  style={{
+                                    display: "inline-block",
+                                    marginLeft: 6,
+                                    fontSize: 10,
+                                    background: "#fee2e2",
+                                    color: "#b91c1c",
+                                    padding: "1px 6px",
+                                    borderRadius: 4,
+                                    fontWeight: 800,
+                                  }}
+                                >
+                                  ↩ BOUNCED
+                                </span>
+                              ) : null}
                             </td>
-                            <td style={{ ...tdStyle, textAlign: "right", fontWeight: 800 }}>
+                            <td style={{ ...tdStyle, textAlign: "right", fontWeight: 800, textDecoration: r.bounced_at ? "line-through" : "none" }}>
                               {money(voucherAmount(r))}
                             </td>
                             <td style={tdStyle}>{r.payment_mode || r.mode || "-"}</td>
+                            <td style={{ ...tdStyle, fontSize: 11, color: "#475569" }}>
+                              {r.cheque_no
+                                ? `Cheque ${r.cheque_no}${r.cheque_date ? ` (${formatLedgerDate(r.cheque_date)})` : ""}`
+                                : r.utr_no
+                                  ? `UTR ${r.utr_no}`
+                                  : "—"}
+                            </td>
                             <td style={{ ...tdStyle, textAlign: "center", whiteSpace: "nowrap" }}>
+                              {r.bounced_at ? (
+                                <button
+                                  onClick={() => undoBounceVoucher(r)}
+                                  title="Undo bounce — payment actually clear ho chuka hai"
+                                  style={{ background: "#fef3c7", color: "#92400e", border: "none", borderRadius: 6, padding: "4px 8px", fontWeight: 700, cursor: "pointer", fontSize: 11, marginRight: 6 }}
+                                >
+                                  ↩ Undo
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => bounceVoucher(r)}
+                                  title="Cheque Bounce / Payment Return — udhaar wapas outstanding ho jayega"
+                                  style={{ background: "#fee2e2", color: "#b91c1c", border: "none", borderRadius: 6, padding: "4px 8px", fontWeight: 700, cursor: "pointer", fontSize: 11, marginRight: 6 }}
+                                >
+                                  ↩ Bounce
+                                </button>
+                              )}
                               <button
                                 onClick={() => startEditVoucher(r)}
                                 title="Edit this receipt/payment"
-                                style={{ background: "#e0f2fe", color: "#0369a1", border: "none", borderRadius: 6, padding: "4px 10px", fontWeight: 700, cursor: "pointer", fontSize: 11, marginRight: 6 }}
+                                style={{ background: "#e0f2fe", color: "#0369a1", border: "none", borderRadius: 6, padding: "4px 8px", fontWeight: 700, cursor: "pointer", fontSize: 11, marginRight: 6 }}
                               >
                                 ✏️ Edit
                               </button>
                               <button
                                 onClick={() => deleteVoucher(r)}
                                 title="Delete this receipt/payment"
-                                style={{ background: "#fee2e2", color: "#b91c1c", border: "none", borderRadius: 6, padding: "4px 10px", fontWeight: 700, cursor: "pointer", fontSize: 11 }}
+                                style={{ background: "#fee2e2", color: "#b91c1c", border: "none", borderRadius: 6, padding: "4px 8px", fontWeight: 700, cursor: "pointer", fontSize: 11 }}
                               >
-                                🗑️ Delete
+                                🗑️
                               </button>
                             </td>
                           </tr>
@@ -1571,6 +1811,134 @@ function PaymentsLedger() {
           )}
         </div>
       </div>
+
+      {/* CHEQUE BOUNCE LIST — chhoti report: sabhi bounced/returned payments */}
+      {showBounceList && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15,23,42,0.55)",
+            zIndex: 1000,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 20,
+          }}
+          onClick={() => setShowBounceList(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: "#fff",
+              borderRadius: 14,
+              width: "100%",
+              maxWidth: 980,
+              maxHeight: "85vh",
+              overflow: "hidden",
+              display: "flex",
+              flexDirection: "column",
+              boxShadow: "0 20px 60px rgba(0,0,0,0.3)",
+            }}
+          >
+            <div
+              style={{
+                padding: "14px 18px",
+                background: "#fef2f2",
+                borderBottom: "1px solid #fecaca",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: 10,
+                flexWrap: "wrap",
+              }}
+            >
+              <div>
+                <strong style={{ fontSize: 15, color: "#991b1b" }}>
+                  ⚠️ Cheque Bounce / Return List ({bouncedVouchers.length})
+                </strong>
+                <div style={{ fontSize: 12, color: "#b91c1c", marginTop: 2 }}>
+                  In payments ka paisa bank me nahi aaya/gaya — bill wapas outstanding hai.
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={printBounceList} style={{ ...filterButtonStyle, background: "#0f172a", color: "#fff" }}>
+                  🖨️ Print
+                </button>
+                <button onClick={() => setShowBounceList(false)} style={{ ...filterButtonStyle, background: "#fff", color: "#b91c1c", border: "1px solid #fca5a5" }}>
+                  ✖ Close
+                </button>
+              </div>
+            </div>
+
+            <div style={{ overflow: "auto", padding: 0 }}>
+              {bouncedVouchers.length === 0 ? (
+                <p style={{ padding: 34, textAlign: "center", color: "#16a34a", fontSize: 14, fontWeight: 700, margin: 0 }}>
+                  ✅ कोई bounced/returned payment नहीं है — सब clear है।
+                </p>
+              ) : (
+                <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                  <thead>
+                    <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e2e8f0" }}>
+                      <th style={thStyle}>Date</th>
+                      <th style={thStyle}>Voucher No</th>
+                      <th style={thStyle}>Party</th>
+                      <th style={{ ...thStyle, textAlign: "right" }}>Amount (₹)</th>
+                      <th style={thStyle}>Mode</th>
+                      <th style={thStyle}>Cheque / UTR</th>
+                      <th style={thStyle}>Reason</th>
+                      <th style={thStyle}>Bounced On</th>
+                      <th style={{ ...thStyle, textAlign: "center" }}>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bouncedVouchers.map((r: any) => (
+                      <tr key={r.id} style={{ borderBottom: "1px solid #f1f5f9", fontSize: 12 }}>
+                        <td style={tdStyle}>{formatLedgerDate(r.transaction_date || r.created_at)}</td>
+                        <td style={{ ...tdStyle, fontWeight: 700, color: "#2563eb" }}>
+                          {r.transaction_no || (String(r.transaction_type || "").toLowerCase().includes("customer") ? `RC-${r.id}` : `PM-${r.id}`)}
+                        </td>
+                        <td style={tdStyle}>{r.party_name || "-"}</td>
+                        <td style={{ ...tdStyle, textAlign: "right", fontWeight: 800, textDecoration: "line-through" }}>
+                          {money(voucherAmount(r))}
+                        </td>
+                        <td style={tdStyle}>{r.payment_mode || r.mode || "-"}</td>
+                        <td style={{ ...tdStyle, fontSize: 11, color: "#475569" }}>
+                          {r.cheque_no ? `Cheque ${r.cheque_no}` : r.utr_no ? `UTR ${r.utr_no}` : "—"}
+                        </td>
+                        <td style={{ ...tdStyle, color: "#b91c1c" }}>{r.bounce_reason || "-"}</td>
+                        <td style={tdStyle}>{formatLedgerDate(String(r.bounced_at || "").slice(0, 10))}</td>
+                        <td style={{ ...tdStyle, textAlign: "center" }}>
+                          <button
+                            onClick={() => {
+                              undoBounceVoucher(r);
+                            }}
+                            title="Payment clear ho chuka hai — wapas normal karein"
+                            style={{ background: "#fef3c7", color: "#92400e", border: "none", borderRadius: 6, padding: "4px 10px", fontWeight: 700, cursor: "pointer", fontSize: 11 }}
+                          >
+                            ↩ Undo Bounce
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr style={{ background: "#fef2f2" }}>
+                      <td colSpan={3} style={{ ...tdStyle, fontWeight: 800, color: "#991b1b" }}>
+                        Total bounced amount
+                      </td>
+                      <td style={{ ...tdStyle, textAlign: "right", fontWeight: 800, color: "#b91c1c" }}>
+                        {money(bouncedVouchers.reduce((s: number, r: any) => s + voucherAmount(r), 0))}
+                      </td>
+                      <td colSpan={5} />
+                    </tr>
+                  </tfoot>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

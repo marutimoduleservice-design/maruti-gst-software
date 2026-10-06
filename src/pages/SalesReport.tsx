@@ -95,12 +95,14 @@ function SalesReport() {
       const legacyItemsRes = itemsRes.data?.length
         ? { data: [] as any[] }
         : await sc("item_master").select("item_code, item_name, purchase_price, cost_price");
-      const receiptRes = await sc("bank_transactions").select("particulars, payment_in, credit_amount, transaction_type, type");
+      const receiptRes = await sc("bank_transactions").select("particulars, payment_in, credit_amount, transaction_type, type, bounced_at");
       const purchaseRows = purchaseRes.data || [];
       const masterCostRows = (itemsRes.data?.length ? itemsRes.data : legacyItemsRes.data || []) as ItemCostRow[];
       const receiptRows = (receiptRes.data || []).filter((row: any) =>
-        String(row.transaction_type || "").toLowerCase().includes("customer receipt") ||
-        String(row.particulars || "").toLowerCase().includes("customer receipt")
+        // Bounced receipt customer ka payment nahi maana ja sakta.
+        !row.bounced_at &&
+        (String(row.transaction_type || "").toLowerCase().includes("customer receipt") ||
+          String(row.particulars || "").toLowerCase().includes("customer receipt"))
       );
       const invoiceByNumber = new Map<string, any>(
         (invData || []).map((invoice: any) => [String(invoice.invoice_no || ""), invoice])

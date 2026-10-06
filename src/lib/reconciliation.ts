@@ -632,6 +632,9 @@ export function summarise(items: ReconItem[]) {
 export function booksForAccount(rows: BankTxn[], accountId: number): BookRow[] {
   return rows
     .filter((r) => num(r.account_id) === accountId)
+    // Bounced/returned payment bank statement me kabhi nahi aayegi, to books
+    // side se bhi hatani chahiye — warna hamesha "only_books" dikha dega.
+    .filter((r) => !r.bounced_at)
     .map(toBookRow)
     .filter((r): r is BookRow => r !== null);
 }

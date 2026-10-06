@@ -93,6 +93,8 @@ function Purchase() {
 
       if (!error && bankData && Array.isArray(bankData)) {
         bankData.forEach((row: any) => {
+          // Bounce/return: paisa account me hila hi nahi.
+          if (row.bounced_at) return;
           const rawAmt = Number(row.amount || row.total_amount || 0);
           const pIn = Number(row.payment_in ?? row.credit_amount ?? 0);
           const pOut = Number(row.payment_out ?? row.debit_amount ?? 0);

@@ -189,7 +189,9 @@ function App() {
       const jobCards = jobsRes.data || [];
       const invoices = invoicesRes.data || [];
       const purchases = purchasesRes.data || [];
-      const bankRows = bankRes.data || [];
+      // Bounced/returned payment asli paisa nahi hai — expenses, receipts aur
+      // outstanding ki har calculation se bahar.
+      const bankRows = (bankRes.data || []).filter((r: any) => !r.bounced_at);
       const customerRows = customersRes.data || [];
       const allItems = itemsRes.data || [];
       const invoiceItems = invoiceItemsRes.data || [];
