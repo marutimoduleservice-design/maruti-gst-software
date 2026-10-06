@@ -601,9 +601,8 @@ function BankPassbook() {
           </h3>
           <p style={{ margin: "0 0 16px", fontSize: 12, color: "#64748b" }}>
             <strong>Default</strong> account naye transactions me chuna jata hai.{" "}
-            <strong>Opening Balance</strong> sirf naye account ke liye daalein — migrated "Bank / General
-            (Old Pool)" ka balance uski history se apne aap aata hai (0 rakha gaya hai taaki purana running
-            balance na toote).
+            <strong>Opening Balance</strong> tabhi daalein jab us account ka pehle se balance ho — us din ke
+            hisaab se; warna 0 rakhein taaki total dobara na ginne lage.
           </p>
 
           <div style={{ overflowX: "auto", marginBottom: 20 }}>
