@@ -45,12 +45,12 @@ create table if not exists public.warranty_returns (
   created_at timestamptz not null default now()
 );
 
--- Warranty module date job card date se pehle kabhi nahi ho sakti.
+-- Pehle yahan CHECK tha ki warranty_module_date job_date se pehle nahi ho sakti.
+-- Wo galat nikla: purane repair kiye modules warranty me wapas aate hain, to
+-- module par likhi date (back date) hamesha nayi job card date se purani hoti hai.
+-- Isliye constraint ab DROP hota hai (dobara run karne par bhi wapas nahi aayega).
 alter table public.warranty_returns
   drop constraint if exists warranty_returns_date_order;
-alter table public.warranty_returns
-  add constraint warranty_returns_date_order
-  check (warranty_module_date >= job_date);
 
 -- NOTE: (job_card_id, warranty_module_date) par UNIQUE index nahi hai, kyunki
 -- ek hi batch me aaye modules par wahi date likhi ho sakti hai. Ye sirf plain
