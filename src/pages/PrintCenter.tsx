@@ -1,5 +1,11 @@
 ﻿import { useEffect, useState, useMemo } from "react";
 import { sc } from "../lib/company";
+import {
+  buildAllocations,
+  getDbAllocations,
+  loadDbAllocations,
+  type AllocBill,
+} from "../lib/billAllocations";
 import QRCode from "qrcode";
 import { SIGNATURE_DATA_URL } from "../lib/signatureData";
 import { currentFY, fyFromStartYear, fyOptions, fyStartYear } from "../lib/financialYear";
@@ -248,48 +254,22 @@ function PrintCenter() {
           customerRefs: (invoicesData as any[]).filter((iv) => String(r.particulars || "").includes(String(iv.invoice_no || ""))),
         }));
 
-        const receiptByCustomer = receiptRows.filter((r) => (r.customerRefs || []).length > 0);
-        const invoiceByNumber = new Map<string, any>(
-          (invoicesData as any[]).map((inv: any) => [String(inv.invoice_no || ""), inv])
-        );
+        // Customer-wise received/deduction — `payment_allocations` table se
+        // (buildAllocations table-first). Rows nahi to wahi purana text-parse.
+        await loadDbAllocations(true);
+        const invoiceBillsForAlloc: AllocBill[] = (invoicesData as any[]).map((iv: any) => ({
+          id: Number(iv.id),
+          ref: String(iv.invoice_no || ""),
+          date: String(iv.invoice_date || ""),
+          total: Number(iv.total_amount || 0),
+        }));
+        const allocByInvoiceId = buildAllocations(invoiceBillsForAlloc, receiptRows);
         const customerAllocations = new Map<string, { received: number; deduction: number }>();
-        receiptByCustomer.forEach((row: any) => {
-          const particulars2 = String(row.particulars || "");
-          const referencedNos = (row.customerRefs || []).map((iv: any) => String(iv.invoice_no || ""));
-          if (referencedNos.length === 0) return;
-          const explicitNos = new Map<string, number>();
-          let anyExplicit = false;
-          (invoicesData as any[]).forEach((invoice: any) => {
-            const no = String(invoice.invoice_no || "");
-            if (!no) return;
-            const m = particulars2.match(new RegExp(no.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + ":\\s*([\\d.]+)"));
-            if (m) {
-              explicitNos.set(no, Number(m[1]) || 0);
-              anyExplicit = true;
-            }
-          });
-          let remainingRecv = Number(row.payment_in ?? row.credit_amount ?? 0);
-          let remainingDisc = Number(particulars2.match(/\[Disc:\s*₹([\d.]+)\]/i)?.[1] || 0);
-          referencedNos.forEach((invNo: string) => {
-            const invoice2 = invoiceByNumber.get(invNo);
-            if (!invoice2) return;
-            const prev2 = customerAllocations.get(invNo) || { received: 0, deduction: 0 };
-            const total2 = Number(invoice2.total_amount || 0);
-            const outstandingBefore = Math.max(0, total2 - prev2.received - prev2.deduction);
-            let receivedForInv: number;
-            if (anyExplicit && explicitNos.has(invNo)) {
-              receivedForInv = Math.min(explicitNos.get(invNo) || 0, outstandingBefore);
-            } else if (anyExplicit) {
-              receivedForInv = 0;
-            } else {
-              receivedForInv = Math.min(remainingRecv, outstandingBefore);
-            }
-            remainingRecv -= receivedForInv;
-            const outstandingAfter = Math.max(0, outstandingBefore - receivedForInv);
-            const discForInv = Math.min(remainingDisc, outstandingAfter);
-            remainingDisc -= discForInv;
-            customerAllocations.set(invNo, { received: prev2.received + receivedForInv, deduction: prev2.deduction + discForInv });
-          });
+        invoiceBillsForAlloc.forEach((b) => {
+          const alloc = allocByInvoiceId.get(b.id);
+          if (alloc && (alloc.paid > 0 || alloc.deduction > 0)) {
+            customerAllocations.set(b.ref, { received: alloc.paid, deduction: alloc.deduction });
+          }
         });
         const mappedInvoicesData = (invoicesData as any[]).map((inv: any) => {
           const alloc = customerAllocations.get(String(inv.invoice_no || "")) || { received: 0, deduction: 0 };
@@ -538,31 +518,61 @@ function PrintCenter() {
     const cust = refs[0] ? customerRecord(refs[0].customer_id) : null;
     const totalDisc = Number(String(rc.particulars || "").match(/\[Disc:\s*₹([\d.]+)\]/i)?.[1] || 0);
 
-    // Bill-wise allocation: distribute this receipt's amount + discount across the
-    // referenced invoices in order, exactly like the Payments & Ledger pending list.
-    let remainingReceived = amount;
-    let remainingDisc = totalDisc;
-    const billRows: Array<{ no: string; date: string; custName: string; total: number; received: number; deduction: number; pending: number; status: string }> = refs.map((iv: any) => {
-      const invTotal = Number(iv.total_amount || 0);
-      const outstandingBefore = Math.max(0, invTotal - 0);
-      const receivedForInvoice = Math.min(remainingReceived, outstandingBefore);
-      remainingReceived -= receivedForInvoice;
-      const outstandingAfterReceipt = Math.max(0, outstandingBefore - receivedForInvoice);
-      const deductionForInvoice = Math.min(remainingDisc, outstandingAfterReceipt);
-      remainingDisc -= deductionForInvoice;
-      const pending = Math.max(0, invTotal - receivedForInvoice - deductionForInvoice);
-      const status = pending <= 0 && invTotal > 0 ? "Paid" : receivedForInvoice > 0 || deductionForInvoice > 0 ? "Partial" : "Pending";
-      return {
-        no: iv.invoice_no || "-",
-        date: String(iv.invoice_date || "").slice(0, 10),
-        custName: customerLabel,
-        total: invTotal,
-        received: receivedForInvoice,
-        deduction: deductionForInvoice,
-        pending,
-        status,
-      };
-    });
+    // Bill-wise allocation: table-first — is receipt ki `payment_allocations`
+    // rows seedha use karo. Rows nahi (purani entry) to wahi purana
+    // text-distribution, exactly like the Payments & Ledger pending list.
+    const dbAlloc = getDbAllocations(Number(rc.id));
+    const billRows: Array<{ no: string; date: string; custName: string; total: number; received: number; deduction: number; pending: number; status: string }> = [];
+    if (dbAlloc && dbAlloc.size > 0) {
+      const invoiceById = new Map<number, any>(
+        (invoices as any[]).map((iv: any) => [Number(iv.id), iv])
+      );
+      dbAlloc.forEach((alloc, invId) => {
+        const iv = invoiceById.get(invId);
+        if (!iv) return;
+        const invTotal = Number(iv.total_amount || 0);
+        const pending = Math.max(0, invTotal - alloc.paid - alloc.deduction);
+        billRows.push({
+          no: iv.invoice_no || "-",
+          date: String(iv.invoice_date || "").slice(0, 10),
+          custName: customerLabel,
+          total: invTotal,
+          received: alloc.paid,
+          deduction: alloc.deduction,
+          pending,
+          status:
+            pending <= 0 && invTotal > 0
+              ? "Paid"
+              : alloc.paid > 0 || alloc.deduction > 0
+                ? "Partial"
+                : "Pending",
+        });
+      });
+    } else {
+      let remainingReceived = amount;
+      let remainingDisc = totalDisc;
+      refs.forEach((iv: any) => {
+        const invTotal = Number(iv.total_amount || 0);
+        const outstandingBefore = Math.max(0, invTotal - 0);
+        const receivedForInvoice = Math.min(remainingReceived, outstandingBefore);
+        remainingReceived -= receivedForInvoice;
+        const outstandingAfterReceipt = Math.max(0, outstandingBefore - receivedForInvoice);
+        const deductionForInvoice = Math.min(remainingDisc, outstandingAfterReceipt);
+        remainingDisc -= deductionForInvoice;
+        const pending = Math.max(0, invTotal - receivedForInvoice - deductionForInvoice);
+        const status = pending <= 0 && invTotal > 0 ? "Paid" : receivedForInvoice > 0 || deductionForInvoice > 0 ? "Partial" : "Pending";
+        billRows.push({
+          no: iv.invoice_no || "-",
+          date: String(iv.invoice_date || "").slice(0, 10),
+          custName: customerLabel,
+          total: invTotal,
+          received: receivedForInvoice,
+          deduction: deductionForInvoice,
+          pending,
+          status,
+        });
+      });
+    }
 
     const billTable = billRows.length
       ? `<div class="receipt-bills">
@@ -651,6 +661,47 @@ function PrintCenter() {
     let remainingPaid = amount;
     let remainingDiscPM = totalDiscPM;
     const pRefs = (pm.paymentRefs || []);
+    const billGroups: Array<{ no: string; date: string; vendName: string; total: number; paid: number; deduction: number; pending: number; status: string }> = [];
+
+    // Per-bill allocation table-first: is payment ki `payment_allocations` rows
+    // seedha. Rows nahi to purana text-distribution (neeche wala branch).
+    const dbPm = getDbAllocations(Number(pm.id));
+    if (dbPm && dbPm.size > 0) {
+      const purchaseById = new Map<number, any>(
+        (purchases as any[]).map((pv: any) => [Number(pv.id), pv])
+      );
+      // Ek hi inward number ki multiple purchase rows ho sakti hain — pehle
+      // inward ke naam se group karo (purana code bhi yahi karta tha).
+      const grouped = new Map<string, { pv: any; paid: number; deduction: number; total: number }>();
+      dbPm.forEach((alloc, billId) => {
+        const pv = purchaseById.get(billId);
+        if (!pv) return;
+        const inw = String(pv.inward_no || pv.purchase_no || `INW-${pv.id}`).toUpperCase();
+        const groupTotal = Number(pv.total_amount || 0);
+        const prev = grouped.get(inw);
+        if (prev) {
+          prev.paid += alloc.paid;
+          prev.deduction += alloc.deduction;
+          prev.total += groupTotal;
+        } else {
+          grouped.set(inw, { pv, paid: alloc.paid, deduction: alloc.deduction, total: groupTotal });
+        }
+      });
+      grouped.forEach(({ pv, paid, deduction, total }, inw) => {
+        const pending = Math.max(0, total - paid - deduction);
+        const status = pending <= 0 && total > 0 ? "Paid" : paid > 0 || deduction > 0 ? "Partial" : "Pending";
+        billGroups.push({
+          no: inw,
+          date: String(pv.purchase_date || "").slice(0, 10),
+          vendName: pv.vendor_name || vendorPart || (vendor?.business_name || vendor?.name || "-"),
+          total,
+          paid,
+          deduction,
+          pending,
+          status,
+        });
+      });
+    }
 
     // Per-bill amounts saved in the voucher as "INW-1: 500.00". When present they win,
     // otherwise the voucher amount is spread over the bills in list order.
@@ -662,9 +713,8 @@ function PrintCenter() {
     }
     const hasExplicitBills = explicitPaidByRef.size > 0;
 
-    const billGroups: Array<{ no: string; date: string; vendName: string; total: number; paid: number; deduction: number; pending: number; status: string }> = [];
     const seenRows = new Set<string>();
-    pRefs.forEach((pv: any) => {
+    if (!dbPm || dbPm.size === 0) pRefs.forEach((pv: any) => {
       const inw = String(pv.inward_no || pv.purchase_no || `INW-${pv.id}`).toUpperCase();
       if (seenRows.has(inw)) return;
       seenRows.add(inw);

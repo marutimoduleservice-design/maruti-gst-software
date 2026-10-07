@@ -5,7 +5,14 @@ import { currentFY, fyFromStartYear, fyOptions, fyOfDate, fyStartYear } from "..
 import { SortTh, useSortedRows } from "../lib/tableSort";
 import {
   buildAllocations,
+  deleteVoucherAllocations,
   escapeRegExp,
+  getDbAllocations,
+  isReceiptRow,
+  isVendorPaymentRow,
+  loadDbAllocations,
+  saveVoucherAllocations,
+  voucherAllocRows,
   voucherAmount,
   type AllocBill,
 } from "../lib/billAllocations";
@@ -187,6 +194,9 @@ function PaymentsLedger() {
     setLoading(true);
 
     try {
+      // payment_allocations cache fresh — iske baad wale buildAllocations calls
+      // table-first chalenge (migration pending ho to wahi purana text-parse).
+      await loadDbAllocations(true);
       const bankRowsLive = await calculateLiveBalance();
       console.log("bankRowsLive:", bankRowsLive.length);
 
@@ -573,38 +583,67 @@ function PaymentsLedger() {
     });
 
     const particulars = String(r.particulars || "");
+    // Table-first: allocation rows hain to edit form unse bharo (text edit ya
+    // cut ho jaye tab bhi sahi). Rows nahi to purana text-parse.
+    const dbAlloc = getDbAllocations(Number(r.id));
     if (activeTab === "Customers") {
-      const refNos = invoices
-        .map((i) => String(i.invoice_no || ""))
-        .filter((no) => no && particulars.includes(no));
-      const ids = invoices
-        .filter((i) => refNos.includes(String(i.invoice_no || "")))
-        .map((i) => i.id);
-      setEntrySelectedIds(ids);
-      const alloc: Record<number, number> = {};
-      invoices.forEach((inv) => {
-        const no = String(inv.invoice_no || "");
-        if (!no) return;
-        const m = particulars.match(new RegExp(escapeRegExp(no) + ":\\s*([\\d.]+)"));
-        if (m) alloc[inv.id] = Number(m[1]) || 0;
-      });
-      setBillAllocations(alloc);
+      const invById = new Map(invoices.map((i) => [Number(i.id), i]));
+      if (dbAlloc && dbAlloc.size > 0) {
+        const ids: number[] = [];
+        const alloc: Record<number, number> = {};
+        dbAlloc.forEach((v, id) => {
+          if (!invById.has(id)) return;
+          ids.push(id);
+          alloc[id] = v.paid;
+        });
+        setEntrySelectedIds(ids);
+        setBillAllocations(alloc);
+      } else {
+        const refNos = invoices
+          .map((i) => String(i.invoice_no || ""))
+          .filter((no) => no && particulars.includes(no));
+        const ids = invoices
+          .filter((i) => refNos.includes(String(i.invoice_no || "")))
+          .map((i) => i.id);
+        setEntrySelectedIds(ids);
+        const alloc: Record<number, number> = {};
+        invoices.forEach((inv) => {
+          const no = String(inv.invoice_no || "");
+          if (!no) return;
+          const m = particulars.match(new RegExp(escapeRegExp(no) + ":\\s*([\\d.]+)"));
+          if (m) alloc[inv.id] = Number(m[1]) || 0;
+        });
+        setBillAllocations(alloc);
+      }
     } else {
-      const refNos = purchases
-        .map((p) => String(p.inward_no || p.purchase_no || `INW-${p.id}`))
-        .filter((no) => no && particulars.includes(no));
-      const ids = purchases
-        .filter((p) => refNos.includes(String(p.inward_no || p.purchase_no || `INW-${p.id}`)))
-        .map((p) => p.id);
-      setEntrySelectedIds(ids);
-      const alloc: Record<number, number> = {};
-      purchases.forEach((p) => {
-        const ref = String(p.inward_no || p.purchase_no || `INW-${p.id}`);
-        if (!ref) return;
-        const m = particulars.match(new RegExp(escapeRegExp(ref) + ":\\s*([\\d.]+)"));
-        if (m) alloc[p.id] = Number(m[1]) || 0;
-      });
-      setBillAllocations(alloc);
+      const purById = new Map(purchases.map((p) => [Number(p.id), p]));
+      if (dbAlloc && dbAlloc.size > 0) {
+        const ids: number[] = [];
+        const alloc: Record<number, number> = {};
+        dbAlloc.forEach((v, id) => {
+          if (!purById.has(id)) return;
+          ids.push(id);
+          alloc[id] = v.paid;
+        });
+        setEntrySelectedIds(ids);
+        setBillAllocations(alloc);
+      } else {
+        const refNos = purchases
+          .map((p) => String(p.inward_no || p.purchase_no || `INW-${p.id}`))
+          .filter((no) => no && particulars.includes(no));
+        const ids = purchases
+          .filter((p) => refNos.includes(String(p.inward_no || p.purchase_no || `INW-${p.id}`)))
+          .map((p) => p.id);
+        setEntrySelectedIds(ids);
+        const alloc: Record<number, number> = {};
+        purchases.forEach((p) => {
+          const ref = String(p.inward_no || p.purchase_no || `INW-${p.id}`);
+          if (!ref) return;
+          const m = particulars.match(new RegExp(escapeRegExp(ref) + ":\\s*([\\d.]+)"));
+          if (m) alloc[p.id] = Number(m[1]) || 0;
+        });
+        setBillAllocations(alloc);
+      }
     }
   };
 
@@ -626,6 +665,9 @@ function PaymentsLedger() {
     }
     setSavingEntry(true);
     try {
+      // Payment ki bill-wise lines ab permanent table me hain — voucher jaane
+      // ke saath unhe bhi hatao (best-effort; table missing ho to delete rukega nahi).
+      await deleteVoucherAllocations(Number(r.id));
       const { error } = await sc("bank_transactions").delete().eq("id", r.id);
       if (error) throw error;
 
@@ -901,14 +943,45 @@ function PaymentsLedger() {
         enqueueOffline({
           label: `Receipt ₹${amount.toLocaleString("en-IN")} — ${custName}`,
           kind: "receipt",
-          payload: { record },
+          payload: {
+            record,
+            // Allocation rows abhi (bina txn id ke) ban jati hain — sync ke
+            // waqt bank_transaction_id jud jayega.
+            alloc_rows: voucherAllocRows(
+              "invoice",
+              invoices.map((i) => ({
+                id: i.id,
+                ref: String(i.invoice_no || ""),
+                date: String(i.invoice_date || ""),
+                total: Number(i.total_amount || 0),
+              })),
+              bankRows.filter(isReceiptRow),
+              record,
+              bankRows.filter(isReceiptRow).length
+            ),
+          },
         });
       } else {
         const { record, statusUpdates, vendorName } = buildVendorRecord();
         enqueueOffline({
           label: `Payment ₹${amount.toLocaleString("en-IN")} — ${vendorName}`,
           kind: "vendor_payment",
-          payload: { record, status_updates: statusUpdates },
+          payload: {
+            record,
+            status_updates: statusUpdates,
+            alloc_rows: voucherAllocRows(
+              "purchase",
+              purchases.map((p) => ({
+                id: p.id,
+                ref: String(p.inward_no || p.purchase_no || `INW-${p.id}`),
+                date: String(p.purchase_date || ""),
+                total: Number(p.total_amount || 0),
+              })),
+              bankRows.filter(isVendorPaymentRow),
+              record,
+              bankRows.filter(isVendorPaymentRow).length
+            ),
+          },
         });
       }
       alert("📴 Offline — entry queue me save ho gayi hai. Internet aate hi app apne aap save kar dega (niche 'pending sync' banner dikhega).");
@@ -952,6 +1025,32 @@ function PaymentsLedger() {
             .eq("id", editingVoucher.id);
           if (updErr) throw updErr;
 
+          // Table rows dobara calculate: edited voucher ki jagah naya record,
+          // aur uske baad ke sab bhi (cumulative context badla hai).
+          const receiptsAll = bankRows.filter(isReceiptRow);
+          const editIdx = receiptsAll.findIndex(
+            (x: any) => Number(x.id) === Number(editingVoucher.id)
+          );
+          const mergedReceipt = { ...editingVoucher, ...updatePayload };
+          const orderedReceipts =
+            editIdx >= 0
+              ? receiptsAll.map((x: any, i: number) => (i === editIdx ? mergedReceipt : x))
+              : [...receiptsAll, mergedReceipt];
+          await saveVoucherAllocations(
+            "invoice",
+            invoices.map((i) => ({
+              id: i.id,
+              ref: String(i.invoice_no || ""),
+              date: String(i.invoice_date || ""),
+              total: Number(i.total_amount || 0),
+            })),
+            orderedReceipts,
+            editIdx >= 0 ? editIdx : receiptsAll.length,
+            editIdx >= 0
+              ? receiptsAll.slice(editIdx).map((x: any) => Number(x.id))
+              : [Number(editingVoucher.id)]
+          );
+
           alert(`✅ Receipt ${editingVoucher.transaction_no || `RC-${editingVoucher.id}`} update हो गई!`);
         } else {
           const selectedBills = purchases.filter((p) => entrySelectedIds.includes(p.id));
@@ -984,6 +1083,30 @@ function PaymentsLedger() {
             .eq("id", editingVoucher.id);
           if (updErr) throw updErr;
 
+          const paymentsAll = bankRows.filter(isVendorPaymentRow);
+          const editIdx = paymentsAll.findIndex(
+            (x: any) => Number(x.id) === Number(editingVoucher.id)
+          );
+          const mergedPayment = { ...editingVoucher, ...updatePayload };
+          const orderedPayments =
+            editIdx >= 0
+              ? paymentsAll.map((x: any, i: number) => (i === editIdx ? mergedPayment : x))
+              : [...paymentsAll, mergedPayment];
+          await saveVoucherAllocations(
+            "purchase",
+            purchases.map((p) => ({
+              id: p.id,
+              ref: String(p.inward_no || p.purchase_no || `INW-${p.id}`),
+              date: String(p.purchase_date || ""),
+              total: Number(p.total_amount || 0),
+            })),
+            orderedPayments,
+            editIdx >= 0 ? editIdx : paymentsAll.length,
+            editIdx >= 0
+              ? paymentsAll.slice(editIdx).map((x: any) => Number(x.id))
+              : [Number(editingVoucher.id)]
+          );
+
           if (selectedPartyId) {
             await recomputeVendorStatuses(Number(selectedPartyId));
           }
@@ -999,8 +1122,25 @@ function PaymentsLedger() {
         const { record, hasExplicit } = buildReceiptRecord();
         const transaction_no = await getNextTransactionNo("RC", entryForm.entry_date);
 
-        const { error: bankErr } = await sc("bank_transactions").insert([{ ...record, transaction_no }]);
+        const { data: inserted, error: bankErr } = await sc("bank_transactions")
+          .insert([{ ...record, transaction_no }])
+          .select("id");
         if (bankErr) throw bankErr;
+
+        const newId = Number(inserted?.[0]?.id || 0);
+        const priorReceipts = bankRows.filter(isReceiptRow);
+        await saveVoucherAllocations(
+          "invoice",
+          invoices.map((i) => ({
+            id: i.id,
+            ref: String(i.invoice_no || ""),
+            date: String(i.invoice_date || ""),
+            total: Number(i.total_amount || 0),
+          })),
+          [...priorReceipts, { ...record, id: newId }],
+          priorReceipts.length,
+          [newId]
+        );
 
         setInvoices((prev) =>
           prev.map((inv) => {
@@ -1015,8 +1155,25 @@ function PaymentsLedger() {
         const { record, statusUpdates } = buildVendorRecord();
         const transaction_no = await getNextTransactionNo("PM", entryForm.entry_date);
 
-        const { error: bankErr } = await sc("bank_transactions").insert([{ ...record, transaction_no }]);
+        const { data: inserted, error: bankErr } = await sc("bank_transactions")
+          .insert([{ ...record, transaction_no }])
+          .select("id");
         if (bankErr) throw bankErr;
+
+        const newId = Number(inserted?.[0]?.id || 0);
+        const priorPayments = bankRows.filter(isVendorPaymentRow);
+        await saveVoucherAllocations(
+          "purchase",
+          purchases.map((p) => ({
+            id: p.id,
+            ref: String(p.inward_no || p.purchase_no || `INW-${p.id}`),
+            date: String(p.purchase_date || ""),
+            total: Number(p.total_amount || 0),
+          })),
+          [...priorPayments, { ...record, id: newId }],
+          priorPayments.length,
+          [newId]
+        );
 
         const statusById = new Map<number, PurchaseBill["status"]>();
         statusUpdates.forEach((upd) => statusById.set(upd.bill_id, upd.status));

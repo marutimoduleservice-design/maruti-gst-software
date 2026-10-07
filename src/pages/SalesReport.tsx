@@ -2,6 +2,11 @@ import { sc } from "../lib/company";
 import { useEffect, useState, useMemo } from "react";
 import { fmtDate } from "../lib/formatDate";
 import { SortTh, useSortedRows } from "../lib/tableSort";
+import {
+  buildAllocations,
+  loadDbAllocations,
+  type AllocBill,
+} from "../lib/billAllocations";
 
 type InvoiceItem = {
   id: number;
@@ -95,7 +100,9 @@ function SalesReport() {
       const legacyItemsRes = itemsRes.data?.length
         ? { data: [] as any[] }
         : await sc("item_master").select("item_code, item_name, purchase_price, cost_price");
-      const receiptRes = await sc("bank_transactions").select("particulars, payment_in, credit_amount, transaction_type, type, bounced_at");
+      const receiptRes = await sc("bank_transactions").select(
+        "id, particulars, payment_in, credit_amount, transaction_type, type, bounced_at"
+      );
       const purchaseRows = purchaseRes.data || [];
       const masterCostRows = (itemsRes.data?.length ? itemsRes.data : legacyItemsRes.data || []) as ItemCostRow[];
       const receiptRows = (receiptRes.data || []).filter((row: any) =>
@@ -104,64 +111,22 @@ function SalesReport() {
         (String(row.transaction_type || "").toLowerCase().includes("customer receipt") ||
           String(row.particulars || "").toLowerCase().includes("customer receipt"))
       );
-      const invoiceByNumber = new Map<string, any>(
-        (invData || []).map((invoice: any) => [String(invoice.invoice_no || ""), invoice])
-      );
+      // Allocation ka source `payment_allocations` table hai (buildAllocations
+      // table-first). Rows abhi nahi bani to wahi purana text-parse chalega.
+      await loadDbAllocations(true);
+      const invoiceBillsForAlloc: AllocBill[] = (invData || []).map((invoice: any) => ({
+        id: Number(invoice.id),
+        ref: String(invoice.invoice_no || ""),
+        date: String(invoice.invoice_date || ""),
+        total: Number(invoice.total_amount || 0),
+      }));
+      const allocByInvoiceId = buildAllocations(invoiceBillsForAlloc, receiptRows);
       const receiptAllocations = new Map<string, { received: number; deduction: number }>();
-
-      receiptRows.forEach((row: any) => {
-        const particulars = String(row.particulars || "");
-        const exactNos = new Map<string, number>();
-        let anyExact = false;
-        (invData || []).forEach((invoice: any) => {
-          const no = String(invoice.invoice_no || "");
-          if (!no) return;
-          const m = particulars.match(new RegExp(no.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + ":\\s*([\\d.]+)"));
-          if (m) {
-            exactNos.set(no, Number(m[1]) || 0);
-            anyExact = true;
-          }
-        });
-        const referencedInvoices = (invData || [])
-          .map((invoice: any) => String(invoice.invoice_no || ""))
-          .filter((invoiceNo: string) => invoiceNo && particulars.includes(invoiceNo));
-
-        if (referencedInvoices.length === 0) return;
-
-        let remainingReceived = Number(row.payment_in ?? row.credit_amount ?? 0);
-        let remainingDeduction = Number(
-          particulars.match(/\[Disc:\s*₹([\d.]+)\]/i)?.[1] || 0
-        );
-
-        referencedInvoices.forEach((invoiceNo) => {
-          const invoice = invoiceByNumber.get(invoiceNo);
-          if (!invoice) return;
-
-          const previous = receiptAllocations.get(invoiceNo) || { received: 0, deduction: 0 };
-          const invoiceTotal = Number(invoice.total_amount || 0);
-          const outstandingBeforeReceipt = Math.max(
-            0,
-            invoiceTotal - previous.received - previous.deduction
-          );
-          const receivedForInvoice = anyExact && exactNos.has(invoiceNo)
-            ? Math.min(exactNos.get(invoiceNo) || 0, outstandingBeforeReceipt)
-            : anyExact
-              ? 0
-              : Math.min(remainingReceived, outstandingBeforeReceipt);
-          remainingReceived -= receivedForInvoice;
-
-          const outstandingAfterReceipt = Math.max(
-            0,
-            outstandingBeforeReceipt - receivedForInvoice
-          );
-          const deductionForInvoice = Math.min(remainingDeduction, outstandingAfterReceipt);
-          remainingDeduction -= deductionForInvoice;
-
-          receiptAllocations.set(invoiceNo, {
-            received: previous.received + receivedForInvoice,
-            deduction: previous.deduction + deductionForInvoice,
-          });
-        });
+      invoiceBillsForAlloc.forEach((b) => {
+        const alloc = allocByInvoiceId.get(b.id);
+        if (alloc && (alloc.paid > 0 || alloc.deduction > 0)) {
+          receiptAllocations.set(b.ref, { received: alloc.paid, deduction: alloc.deduction });
+        }
       });
 
       const findPurchase = (line: any) => purchaseRows.find((row: any) =>

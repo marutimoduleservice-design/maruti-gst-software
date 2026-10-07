@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { fmtDate } from "../lib/formatDate";
 import { SortTh, useSortedRows } from "../lib/tableSort";
 import Reconciliation from "../components/Reconciliation";
-import { vendorPaymentParticularsWithPo } from "../lib/billAllocations";
+import { deleteVoucherAllocations, vendorPaymentParticularsWithPo } from "../lib/billAllocations";
 import type { BankAccount, BankTxn } from "../lib/bankAccounts";
 import {
   TRANSFER_TYPE,
@@ -425,6 +425,8 @@ function BankPassbook() {
   const handleDelete = async (id: number) => {
     if (!window.confirm("क्या आप वाकई इस ट्रांजेक्शन को पासबुक से हटाना चाहते हैं?")) return;
     try {
+      // Voucher ki bill-wise allocation lines bhi hatao (best-effort).
+      await deleteVoucherAllocations(Number(id));
       const { error } = await sc("bank_transactions").delete().eq("id", id);
       if (error) throw error;
       await loadAllPassbookData();

@@ -109,8 +109,22 @@ async function replayEntry(entry: OfflineEntry): Promise<void> {
     const prefix = entry.kind === "receipt" ? "RC" : "PM";
     const record = entry.payload.record;
     const transaction_no = await getNextTransactionNo(prefix, record.transaction_date);
-    const { error } = await sc("bank_transactions").insert([{ ...record, transaction_no }]);
+    const { data: inserted, error } = await sc("bank_transactions")
+      .insert([{ ...record, transaction_no }])
+      .select("id");
     if (error) throw error;
+
+    // Allocation rows enqueue ke waqt hi ban chuki hain (bina txn id) — ab id
+    // jud jaaye. Fail ho to koi baat nahi: screen text fallback par sahi rahegi,
+    // entry phir se duplicate karne se bachne ke liye error mat throw karo.
+    const allocRows = Array.isArray(entry.payload.alloc_rows) ? entry.payload.alloc_rows : [];
+    const txnId = Number(inserted?.[0]?.id || 0);
+    if (txnId && allocRows.length) {
+      const { error: allocErr } = await sc("payment_allocations").insert(
+        allocRows.map((r: any) => ({ ...r, bank_transaction_id: txnId }))
+      );
+      if (allocErr) console.error("Offline sync: payment_allocations insert failed", allocErr.message);
+    }
 
     if (entry.kind === "vendor_payment" && Array.isArray(entry.payload.status_updates)) {
       for (const upd of entry.payload.status_updates) {

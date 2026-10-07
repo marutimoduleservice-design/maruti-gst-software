@@ -35,6 +35,7 @@ export const COMPANY_SCOPED_TABLES = new Set<string>([
   "customer_item_prices",
   "bank_statement_batches",
   "bank_statement_lines",
+  "payment_allocations",
 ]);
 
 export function getCompanyId(): number {

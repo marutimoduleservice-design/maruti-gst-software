@@ -7,6 +7,8 @@ import { fmtDate } from "./lib/formatDate";
 import { computeProfitMonthly, profitTotals } from "./lib/profitCalc";
 import { computeStockValue } from "./lib/stockValue";
 import { isTransferRow } from "./lib/bankAccounts";
+import { buildAllocations, loadDbAllocations, type AllocBill } from "./lib/billAllocations";
+import { backfillPaymentAllocations } from "./lib/allocationBackfill";
 import { currentFY } from "./lib/financialYear";
 import { allowedMenus, canOpen, roleLabel, type AppUser } from "./lib/roles";
 import "./App.css";
@@ -276,6 +278,30 @@ function App() {
     };
   }, [session, appUser]);
 
+  // Payment allocations ka ek-time backfill: purane vouchers ki bill-wise
+  // lines `particulars` text se nikal kar `payment_allocations` table me daal
+  // do. Sirf admin ke session me, ek baar (sessionStorage guard). Migration SQL
+  // abhi nahi chali to chup-chaap skip — screens waise bhi text fallback par
+  // chalti hain. Backfill ke baad koi figure nahi badalta (rows wahi purane
+  // algorithm se bante hain).
+  useEffect(() => {
+    if (roleLoading || !appUser || appUser.role !== "admin") return;
+    if (typeof sessionStorage === "undefined") return;
+    if (sessionStorage.getItem("m5_alloc_backfill_v1")) return;
+    sessionStorage.setItem("m5_alloc_backfill_v1", "1");
+    backfillPaymentAllocations()
+      .then((n) => {
+        if (n > 0) console.log(`payment_allocations backfill: ${n} lines inserted`);
+      })
+      .catch((err) => {
+        sessionStorage.removeItem("m5_alloc_backfill_v1");
+        console.warn(
+          "payment_allocations backfill skip (migration SQL pending?):",
+          err?.message || err
+        );
+      });
+  }, [roleLoading, appUser]);
+
   // Role/permission ke hisaab se activeMenu ko allowed menu par wapas lao
   // (jaise Dashboard ke quick action se koi restricted page khul jaye).
   useEffect(() => {
@@ -387,39 +413,27 @@ function App() {
       const saving = profitTotalsRow.saving;
 
       // Customer Outstanding = Invoice total - receipts - discounts (deduction)
-      const invoiceByNumber = new Map<string, any>(
-        (invoices || []).map((invoice: any) => [String(invoice.invoice_no || ""), invoice])
-      );
+      // Allocation ka source `payment_allocations` table hai (buildAllocations
+      // table-first hai); rows abhi bani nahi to wahi purana text-parse chalega.
+      await loadDbAllocations(true);
       const receiptRows = bankRows.filter((r: any) => {
         const type = String(r.transaction_type || r.type || "").toLowerCase();
         const particulars = String(r.particulars || "").toLowerCase();
         return type.includes("customer receipt") || particulars.includes("customer receipt");
       });
+      const invoiceBillsForAlloc: AllocBill[] = (invoices || []).map((invoice: any) => ({
+        id: Number(invoice.id),
+        ref: String(invoice.invoice_no || ""),
+        date: String(invoice.invoice_date || ""),
+        total: Number(invoice.total_amount || 0),
+      }));
+      const allocById = buildAllocations(invoiceBillsForAlloc, receiptRows);
       const receiptAllocations = new Map<string, { received: number; deduction: number }>();
-      receiptRows.forEach((row: any) => {
-        const particulars = String(row.particulars || "");
-        const referencedInvoices = (invoices || [])
-          .map((invoice: any) => String(invoice.invoice_no || ""))
-          .filter((invoiceNo: string) => invoiceNo && particulars.includes(invoiceNo));
-        if (referencedInvoices.length === 0) return;
-        let remainingReceived = Number(row.payment_in ?? row.credit_amount ?? 0);
-        let remainingDeduction = Number(particulars.match(/\[Disc:\s*₹([\d.]+)\]/i)?.[1] || 0);
-        referencedInvoices.forEach((invoiceNo) => {
-          const invoice = invoiceByNumber.get(invoiceNo);
-          if (!invoice) return;
-          const previous = receiptAllocations.get(invoiceNo) || { received: 0, deduction: 0 };
-          const invoiceTotal = Number(invoice.total_amount || 0);
-          const outstandingBefore = Math.max(0, invoiceTotal - previous.received - previous.deduction);
-          const receivedForInvoice = Math.min(remainingReceived, outstandingBefore);
-          remainingReceived -= receivedForInvoice;
-          const outstandingAfter = Math.max(0, outstandingBefore - receivedForInvoice);
-          const deductionForInvoice = Math.min(remainingDeduction, outstandingAfter);
-          remainingDeduction -= deductionForInvoice;
-          receiptAllocations.set(invoiceNo, {
-            received: previous.received + receivedForInvoice,
-            deduction: previous.deduction + deductionForInvoice,
-          });
-        });
+      invoiceBillsForAlloc.forEach((b) => {
+        const alloc = allocById.get(b.id);
+        if (alloc && (alloc.paid > 0 || alloc.deduction > 0)) {
+          receiptAllocations.set(b.ref, { received: alloc.paid, deduction: alloc.deduction });
+        }
       });
 
       const totalOutstanding = (invoices || []).reduce((s, i: any) => {

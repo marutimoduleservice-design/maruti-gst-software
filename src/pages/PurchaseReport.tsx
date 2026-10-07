@@ -5,6 +5,7 @@ import { SortTh, useSortedRows } from "../lib/tableSort";
 import {
   buildAllocations,
   isVendorPaymentRow,
+  loadDbAllocations,
   purchaseDueAmount,
   type AllocBill,
   type BillAllocation,
@@ -86,7 +87,9 @@ function PurchaseReport() {
       const purchaseRows = (purchaseData || []) as PurchaseItem[];
       setPurchases(purchaseRows);
 
-      // Vendor payment vouchers se har bill ka paid/deduction nikalo.
+      // Vendor payment vouchers se har bill ka paid/deduction nikalo —
+      // buildAllocations table-first hai, isliye cache fresh hona zaroori.
+      await loadDbAllocations(true);
       const bills: AllocBill[] = purchaseRows.map((p) => ({
         id: p.id,
         ref: p.inward_no || p.purchase_no || `INW-${p.id}`,
