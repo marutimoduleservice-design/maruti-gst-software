@@ -133,7 +133,15 @@ function App() {
     });
 
     const { data: authListener } = supabase.auth.onAuthStateChange((event, nextSession) => {
-      setSession(nextSession);
+      // Tab wapas aane par (ya har ~1 hour) Supabase token refresh karta hai.
+      // Uska session object naya hota hai par user wahi — agar setSession kar
+      // diya to role effect dobara chal kar poori app ko loading screen se
+      // unmount karta tha (naam: "Loading your access role...") aur form ki
+      // unsaved entries bhi kharab ho jati thin. Isliye in events par session
+      // state mat badlo. Token client andar khud update kar leta hai.
+      if (event !== "TOKEN_REFRESHED" && event !== "INITIAL_SESSION") {
+        setSession(nextSession);
+      }
       if (event === "SIGNED_IN") loginEventPending.current = true;
       if (event === "PASSWORD_RECOVERY") setRecoveryMode(true);
       setAuthLoading(false);
@@ -159,10 +167,33 @@ function App() {
         loginEventPending.current = false;
         return;
       }
-      setRoleLoading(true);
       const uid = session.user.id;
       const email = String(session.user.email || "").toLowerCase();
 
+      // Same user ke liye session dobara set hua (tab wapas aana / token
+      // event) to role ka full load mat karo — warna "Loading your access
+      // role..." screen poori app ko unmount kar deti thi aur bina save ki
+      // entries kharab ho jati thin. Sirf naya login ya user change par load.
+      if (appUser && appUser.auth_user_id === uid) {
+        if (loginEventPending.current) {
+          loginEventPending.current = false;
+          supabase
+            .from("login_events")
+            .insert({
+              auth_user_id: uid,
+              email,
+              full_name: appUser.full_name || "",
+              role: appUser.role,
+              user_agent: navigator.userAgent,
+            })
+            .then(({ error }: { error: { message: string } | null }) => {
+              if (error) console.warn("login_events insert fail:", error.message);
+            });
+        }
+        return;
+      }
+
+      setRoleLoading(true);
       try {
         const { data: rows, error } = await sc("app_users")
           .select("*")
@@ -242,7 +273,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [session]);
+  }, [session, appUser]);
 
   // Role/permission ke hisaab se activeMenu ko allowed menu par wapas lao
   // (jaise Dashboard ke quick action se koi restricted page khul jaye).
