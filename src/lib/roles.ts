@@ -66,6 +66,7 @@ const ALL_MENUS: string[] = [
   "Item Wise Qty In Out Report",
   "Settings",
   "Users & Roles",
+  "Activity Log",
 ];
 
 // Har role ki permission list. Sirf yahan menus me entries badalni hain.
@@ -106,6 +107,7 @@ const ACCESS: Record<StaffRole, string[]> = {
   technician: ["Module Repair"],
 
   // Auditor: sab kuch sirf dekhne ke liye, par Salary report bhi nahi.
+  // Activity Log (audit trail) bhi dikhta hai — padhne wala page hai.
   auditor: [
     "Dashboard",
     "Stock Report",
@@ -114,6 +116,7 @@ const ACCESS: Record<StaffRole, string[]> = {
     "Expense Report",
     "Net Profit Report",
     "Item Wise Qty In Out Report",
+    "Activity Log",
   ],
 
   pending: [],

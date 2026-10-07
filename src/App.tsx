@@ -12,6 +12,7 @@ import { allowedMenus, canOpen, roleLabel, type AppUser } from "./lib/roles";
 import "./App.css";
 import Login from "./pages/Login";
 import UsersRoles from "./pages/UsersRoles";
+import ActivityLog from "./pages/ActivityLog";
 
 // Operational Pages
 import Customers from "./pages/Customers";
@@ -805,6 +806,9 @@ function App() {
     // 5. Users & Roles (admin only)
     if (activeMenu === "Users & Roles") return <UsersRoles currentUid={session?.user.id || ""} />;
 
+    // 6. Activity Log (Admin + Auditor)
+    if (activeMenu === "Activity Log") return <ActivityLog />;
+
     return (
       <div className="page-title">
         <div>
@@ -1073,6 +1077,16 @@ function App() {
             >
               <span className="menu-icon">⚙</span>
               <span>Settings</span>
+            </button>
+          )}
+
+          {roleMenus.includes("Activity Log") && (
+            <button
+              className={`menu-item ${activeMenu === "Activity Log" ? "active" : ""}`}
+              onClick={() => selectMenu("Activity Log")}
+            >
+              <span className="menu-icon">🕘</span>
+              <span>Activity Log</span>
             </button>
           )}
 

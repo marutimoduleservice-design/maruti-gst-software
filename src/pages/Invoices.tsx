@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { fmtDate } from "../lib/formatDate";
 import { SortTh, useSortedRows } from "../lib/tableSort";
+import HistoryPanel from "../components/HistoryPanel";
 
 type Invoice = {
   id: number;
@@ -97,6 +98,7 @@ const [invoicedQtyByJob, setInvoicedQtyByJob] = useState<Record<string, number>>
 
   const [printingInvoice, setPrintingInvoice] = useState<Invoice | null>(null);
   const [printingItems, setPrintingItems] = useState<any[]>([]);
+  const [historyInvoice, setHistoryInvoice] = useState<Invoice | null>(null);
 
   const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split("T")[0]);
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
@@ -868,6 +870,22 @@ const handleDeleteInvoice = async (inv: Invoice) => {
         </div>
       )}
 
+      {historyInvoice && (
+        <div
+          onMouseDown={(e) => { if (e.target === e.currentTarget) setHistoryInvoice(null); }}
+          style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 1000 }}
+        >
+          <div style={{ background: "white", width: "640px", maxWidth: "94vw", padding: "24px", borderRadius: "8px", position: "relative", maxHeight: "85vh", overflowY: "auto" }}>
+            <button onClick={() => setHistoryInvoice(null)} style={{ position: "absolute", top: 15, right: 15, background: "#dc2626", color: "white", border: "none", padding: "6px 12px", borderRadius: 4, cursor: "pointer" }}>Close ✕</button>
+            <h3 style={{ margin: "0 0 4px", color: "#0f172a" }}>🕘 Invoice History — {historyInvoice.invoice_no}</h3>
+            <p style={{ margin: "0 0 16px", fontSize: 13, color: "#64748b" }}>
+              Kab bana, kisne edit kiya, kya badla — poora audit trail.
+            </p>
+            <HistoryPanel entity="Invoice" entityId={historyInvoice.id} />
+          </div>
+        </div>
+      )}
+
       <div style={{ display: "flex", gap: "10px", marginBottom: "20px" }}>
         <button 
           onClick={() => { setActiveTab("Job Card"); setLineItems([]); setSelectedJobCardId(""); setEditingInvoiceId(null); }}
@@ -887,7 +905,18 @@ const handleDeleteInvoice = async (inv: Invoice) => {
         {editingInvoiceId && (
           <div style={{ background: "#ffedd5", color: "#c2410c", padding: "8px 12px", borderRadius: "6px", marginBottom: 15, fontWeight: "bold", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <span>⚠️ Editing Mode Active for Invoice ID: {editingInvoiceId}</span>
-            <button onClick={() => { setEditingInvoiceId(null); setLineItems([]); setSelectedJobCardId(""); }} style={{ background: "#c2410c", color: "white", border: "none", padding: "4px 8px", borderRadius: "4px", cursor: "pointer" }}>Cancel Edit</button>
+            <span style={{ display: "flex", gap: 8 }}>
+              <button
+                onClick={() => {
+                  const inv = invoices.find((i) => i.id === editingInvoiceId);
+                  if (inv) setHistoryInvoice(inv);
+                }}
+                style={{ background: "#475569", color: "white", border: "none", padding: "4px 8px", borderRadius: "4px", cursor: "pointer" }}
+              >
+                🕘 History
+              </button>
+              <button onClick={() => { setEditingInvoiceId(null); setLineItems([]); setSelectedJobCardId(""); }} style={{ background: "#c2410c", color: "white", border: "none", padding: "4px 8px", borderRadius: "4px", cursor: "pointer" }}>Cancel Edit</button>
+            </span>
           </div>
         )}
 
@@ -1094,6 +1123,12 @@ const handleDeleteInvoice = async (inv: Invoice) => {
                         style={{ background: "#16a34a", color: "white", border: "none", padding: "6px 10px", borderRadius: "4px", cursor: "pointer", fontWeight: "bold" }}
                       >
                         🖨️ Print
+                      </button>
+                      <button 
+                        onClick={() => setHistoryInvoice(inv)} 
+                        style={{ background: "#475569", color: "white", border: "none", padding: "6px 10px", borderRadius: "4px", cursor: "pointer", fontWeight: "bold" }}
+                      >
+                        🕘 History
                       </button>
                       <button 
                         onClick={() => handleDeleteInvoice(inv)} 

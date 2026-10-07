@@ -1,3 +1,5 @@
+import HistoryPanel from "../components/HistoryPanel";
+
 export type Customer = {
   id: number;
   customer_code: number | null;
@@ -87,6 +89,16 @@ function CustomerDetails({ customer, onClose }: CustomerDetailsProps) {
                 <div><dt>GST Number</dt><dd>{customer.gst_number || "Not applicable"}</dd></div>
                 <div><dt>Address</dt><dd>{customer.business_address || "Not added"}</dd></div>
               </dl>
+            </section>
+
+            <section className="customer-detail-card">
+              <div className="customer-detail-card-header">
+                <div>
+                  <h3>🕘 Change History</h3>
+                  <p>Kab bana, kisne edit kiya, kya badla (audit trail)</p>
+                </div>
+              </div>
+              <HistoryPanel entity="Customer" entityId={customer.id} />
             </section>
 
             <section className="customer-detail-card">
