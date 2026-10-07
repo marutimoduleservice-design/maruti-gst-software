@@ -13,6 +13,7 @@ import "./App.css";
 import Login from "./pages/Login";
 import UsersRoles from "./pages/UsersRoles";
 import ActivityLog from "./pages/ActivityLog";
+import SyncBanner from "./components/SyncBanner";
 
 // Operational Pages
 import Customers from "./pages/Customers";
@@ -931,6 +932,7 @@ function App() {
 
   return (
     <div className="app-layout">
+      <SyncBanner />
       <aside className={`sidebar ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
         <button
           className="sidebar-toggle"

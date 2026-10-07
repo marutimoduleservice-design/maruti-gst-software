@@ -4,6 +4,7 @@ import { supabase } from "../lib/supabase";
 import { fmtDate } from "../lib/formatDate";
 import { SortTh, useSortedRows } from "../lib/tableSort";
 import HistoryPanel from "../components/HistoryPanel";
+import { enqueueOffline, isOffline } from "../lib/offlineQueue";
 
 type Invoice = {
   id: number;
@@ -125,15 +126,24 @@ const [invoicedQtyByJob, setInvoicedQtyByJob] = useState<Record<string, number>>
   const loadData = async () => {
     setLoading(true);
 
-    const [invRes, purchaseRes, itemRes, custRes, jobRes, invoiceItemsRes, priceRes] = await Promise.all([
-      sc("invoices").select("*").order("id", { ascending: false }),
-      sc("purchases").select("*"),
-      sc("items").select("*"),
-      sc("customers").select("*").order("business_name"),
-      sc("job_cards").select("id, job_no, status, customer_id, repairing_quantity, warranty_quantity, reject_quantity").order("id", { ascending: false }),
-      sc("invoice_items").select("invoice_id, inward_no, item_name, quantity"),
-      sc("customer_item_prices").select("*")
-    ]);
+    // Offline: Promise.all reject hoga — jo data pehle se screen par hai wahi
+    // rehne do, warna loading spinner hamesha ke liye atak jayega.
+    let results: any[] | null = null;
+    try {
+      results = await Promise.all([
+        sc("invoices").select("*").order("id", { ascending: false }),
+        sc("purchases").select("*"),
+        sc("items").select("*"),
+        sc("customers").select("*").order("business_name"),
+        sc("job_cards").select("id, job_no, status, customer_id, repairing_quantity, warranty_quantity, reject_quantity").order("id", { ascending: false }),
+        sc("invoice_items").select("invoice_id, inward_no, item_name, quantity"),
+        sc("customer_item_prices").select("*")
+      ]);
+    } catch {
+      setLoading(false);
+      return;
+    }
+    const [invRes, purchaseRes, itemRes, custRes, jobRes, invoiceItemsRes, priceRes] = results;
 
     const customerRows = (custRes.data || []) as Customer[];
     const jobRows = (jobRes.data || []) as Omit<JobCard, "customers">[];
@@ -786,6 +796,51 @@ const handleDeleteInvoice = async (inv: Invoice) => {
       }
     }
 
+    const basePayload = {
+      p_mode: editingInvoiceId ? "edit" : "create",
+      p_editing_invoice_id: editingInvoiceId,
+      p_invoice_date: invoiceDate,
+      p_customer_id: Number(selectedCustomerId),
+      p_job_card_id: activeTab === "Job Card" ? Number(selectedJobCardId) : null,
+      p_invoice_type: activeTab,
+      p_total_amount: Number(grandTotal) || 0,
+      p_lines: lineItems.map((item) => ({
+        inward_no: item.inward_no || "",
+        item_id: item.item_id ? Number(item.item_id) : null,
+        item_name: item.item_name || "",
+        quantity: Number(item.quantity) || 1,
+        rate: Number(item.rate) || 0,
+        total: Number(item.total) || 0,
+        cost_rate: Number(item.cost_rate) || 0,
+        source: item.source || "Spare Part",
+      })),
+      p_company_id: getCompanyId(),
+    };
+
+    // 📴 Offline: naya invoice queue me save hota hai aur internet aate hi app
+    // apne aap server par bhej deta hai (niche "pending sync" banner dikhta hai).
+    // Edit offline me allow nahi — purani invoice par live payment/stock check
+    // lagta hai jo offline verify nahi ho sakta.
+    if (isOffline()) {
+      if (editingInvoiceId) {
+        alert("📴 Offline mode — invoice edit save nahi ho sakta. Internet connect karke dobara try karein.");
+        return;
+      }
+      enqueueOffline({
+        label: `Invoice ${activeTab} — ₹${Number(grandTotal || 0).toLocaleString("en-IN")}`,
+        kind: "invoice",
+        payload: { ...basePayload, p_old_items: [] },
+      });
+      alert("📴 Offline — invoice queue me save ho gaya hai. Internet aate hi app apne aap save kar dega (niche 'pending sync' banner dikhega).");
+      setEditingInvoiceId(null);
+      setSelectedJobCardId("");
+      setSelectedCustomerId("");
+      setSelectedCustomerName("");
+      setSelectedCustomerMobile("");
+      setLineItems([]);
+      return;
+    }
+
     try {
       await validateLiveSpareStock();
     } catch (stockError: any) {
@@ -825,27 +880,7 @@ const handleDeleteInvoice = async (inv: Invoice) => {
           })()
         : [];
 
-      const payload = {
-        p_mode: editingInvoiceId ? "edit" : "create",
-        p_editing_invoice_id: editingInvoiceId,
-        p_invoice_date: invoiceDate,
-        p_customer_id: Number(selectedCustomerId),
-        p_job_card_id: activeTab === "Job Card" ? Number(selectedJobCardId) : null,
-        p_invoice_type: activeTab,
-        p_total_amount: Number(grandTotal) || 0,
-        p_lines: lineItems.map((item) => ({
-          inward_no: item.inward_no || "",
-          item_id: item.item_id ? Number(item.item_id) : null,
-          item_name: item.item_name || "",
-          quantity: Number(item.quantity) || 1,
-          rate: Number(item.rate) || 0,
-          total: Number(item.total) || 0,
-          cost_rate: Number(item.cost_rate) || 0,
-          source: item.source || "Spare Part",
-        })),
-        p_old_items: oldItems,
-        p_company_id: getCompanyId(),
-      };
+      const payload = { ...basePayload, p_old_items: oldItems };
 
       const { data: result, error } = await supabase.rpc("save_invoice_atomic", payload);
 

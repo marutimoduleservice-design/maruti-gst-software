@@ -1,5 +1,6 @@
 import { sc } from "../lib/company";
 import { useEffect, useState, useMemo } from "react";
+import { enqueueOffline, isOffline } from "../lib/offlineQueue";
 import { currentFY, fyFromStartYear, fyOptions, fyOfDate, fyStartYear } from "../lib/financialYear";
 import { SortTh, useSortedRows } from "../lib/tableSort";
 import {
@@ -823,6 +824,99 @@ function PaymentsLedger() {
       utr_no: entryForm.payment_mode !== "Cash" ? entryForm.utr_no.trim() || null : null,
     };
 
+    // Record builders — offline queue aur online insert dono isi se banate hain
+    // taaki dono paths ka data bilkul same rahe. transaction_no yahan nahi hai:
+    // wo sync/insert ke waqt generate hota hai (FY-wise RC/PM series).
+    const buildReceiptRecord = () => {
+      const selectedInvs = invoices.filter((i) => entrySelectedIds.includes(i.id));
+      const { hasExplicit, refs: invNos } = formatBillRefs(
+        selectedInvs.map((i) => ({ id: i.id, ref: String(i.invoice_no || "") })),
+        billAllocations
+      );
+      const custName = selectedParty?.name || "Customer";
+      const record = {
+        transaction_date: entryForm.entry_date,
+        particulars: `Customer Receipt: ${custName} (${invNos})${deduction > 0 ? ` [Disc: ₹${deduction}]` : ""}`,
+        notes: `Customer Receipt: ${custName} (${invNos})`,
+        party_name: custName,
+        transaction_type: "Customer Receipt (+)",
+        type: "credit",
+        payment_in: amount,
+        payment_out: 0,
+        credit_amount: amount,
+        debit_amount: 0,
+        amount: amount,
+        payment_mode: entryForm.payment_mode,
+        account_id: entryForm.account_id ? Number(entryForm.account_id) : null,
+        remarks: entryForm.remarks || (deduction > 0 ? `Discount: ₹${deduction}` : ""),
+        ...payDetails,
+      };
+      return { record, hasExplicit, invNos, custName };
+    };
+
+    const buildVendorRecord = () => {
+      const selectedBills = purchases.filter((p) => entrySelectedIds.includes(p.id));
+      const { hasExplicit, refs: inwardNos } = formatBillRefs(
+        selectedBills.map((p) => ({ id: p.id, ref: String(p.inward_no || p.purchase_no || `INW-${p.id}`) })),
+        billAllocations
+      );
+      const vendorName = selectedParty?.name || "Vendor";
+      const record = {
+        transaction_date: entryForm.entry_date,
+        particulars: `Vendor Payment: ${vendorName} (${inwardNos})${deduction > 0 ? ` [Disc: ₹${deduction}]` : ""}`,
+        notes: `Vendor Payment: ${vendorName} (${inwardNos})`,
+        party_name: vendorName,
+        transaction_type: "Vendor Payment (-)",
+        type: "debit",
+        payment_in: 0,
+        payment_out: amount,
+        credit_amount: 0,
+        debit_amount: amount,
+        amount: amount,
+        payment_mode: entryForm.payment_mode,
+        account_id: entryForm.account_id ? Number(entryForm.account_id) : null,
+        remarks: entryForm.remarks || (deduction > 0 ? `Discount: ₹${deduction}` : ""),
+        ...payDetails,
+      };
+      // Bill statuses ledger allocation (paid / disc / pending) se aati hain,
+      // wahi source jo table dikhata hai — DB aur screen kabhi disagree nahi.
+      const statusUpdates: { bill_id: number; status: PurchaseBill["status"] }[] = selectedBills.map((p) => {
+        const billPending = Number(p.pending_amount ?? p.total_amount ?? 0);
+        const paidNow = hasExplicit ? Number(billAllocations[p.id] || 0) || 0 : billPending;
+        return { bill_id: p.id, status: (paidNow + deduction >= billPending - 0.005 ? "Paid" : "Partial") as PurchaseBill["status"] };
+      });
+      return { record, statusUpdates, vendorName };
+    };
+
+    // 📴 Offline: entry queue me save hoti hai aur internet aate hi app apne aap
+    // server par bhej deta hai (niche "pending sync" banner dikhta hai). Edit
+    // offline me allow nahi — purani voucher par live checks offline nahi ho sakte.
+    if (isOffline()) {
+      if (editingVoucher) {
+        alert("📴 Offline mode — voucher edit save nahi ho sakta. Internet connect karke dobara try karein.");
+        return;
+      }
+      if (activeTab === "Customers") {
+        const { record, custName } = buildReceiptRecord();
+        enqueueOffline({
+          label: `Receipt ₹${amount.toLocaleString("en-IN")} — ${custName}`,
+          kind: "receipt",
+          payload: { record },
+        });
+      } else {
+        const { record, statusUpdates, vendorName } = buildVendorRecord();
+        enqueueOffline({
+          label: `Payment ₹${amount.toLocaleString("en-IN")} — ${vendorName}`,
+          kind: "vendor_payment",
+          payload: { record, status_updates: statusUpdates },
+        });
+      }
+      alert("📴 Offline — entry queue me save ho gayi hai. Internet aate hi app apne aap save kar dega (niche 'pending sync' banner dikhega).");
+      setEntrySelectedIds([]);
+      setBillAllocations({});
+      return;
+    }
+
     setSavingEntry(true);
     try {
       if (editingVoucher) {
@@ -902,33 +996,10 @@ function PaymentsLedger() {
       }
 
       if (activeTab === "Customers") {
-        const selectedInvs = invoices.filter((i) => entrySelectedIds.includes(i.id));
-        const { hasExplicit, refs: invNos } = formatBillRefs(
-          selectedInvs.map((i) => ({ id: i.id, ref: String(i.invoice_no || "") })),
-          billAllocations
-        );
-        const custName = selectedParty?.name || "Customer";
+        const { record, hasExplicit } = buildReceiptRecord();
+        const transaction_no = await getNextTransactionNo("RC", entryForm.entry_date);
 
-        const receiptRecord = {
-          transaction_no: await getNextTransactionNo("RC", entryForm.entry_date),
-          transaction_date: entryForm.entry_date,
-          particulars: `Customer Receipt: ${custName} (${invNos})${deduction > 0 ? ` [Disc: ₹${deduction}]` : ""}`,
-          notes: `Customer Receipt: ${custName} (${invNos})`,
-          party_name: custName,
-          transaction_type: "Customer Receipt (+)",
-          type: "credit",
-          payment_in: amount,
-          payment_out: 0,
-          credit_amount: amount,
-          debit_amount: 0,
-          amount: amount,
-          payment_mode: entryForm.payment_mode,
-          account_id: entryForm.account_id ? Number(entryForm.account_id) : null,
-          remarks: entryForm.remarks || (deduction > 0 ? `Discount: ₹${deduction}` : ""),
-          ...payDetails,
-        };
-
-        const { error: bankErr } = await sc("bank_transactions").insert([receiptRecord]);
+        const { error: bankErr } = await sc("bank_transactions").insert([{ ...record, transaction_no }]);
         if (bankErr) throw bankErr;
 
         setInvoices((prev) =>
@@ -941,49 +1012,20 @@ function PaymentsLedger() {
         );
         alert(`✅ ${money(amount)} की रसीद (RC) सफलतापूर्वक पासबुक में जमा हो गई!`);
       } else {
-        const selectedBills = purchases.filter((p) => entrySelectedIds.includes(p.id));
-        const { hasExplicit, refs: inwardNos } = formatBillRefs(
-          selectedBills.map((p) => ({ id: p.id, ref: String(p.inward_no || p.purchase_no || `INW-${p.id}`) })),
-          billAllocations
-        );
-        const vendorName = selectedParty?.name || "Vendor";
+        const { record, statusUpdates } = buildVendorRecord();
+        const transaction_no = await getNextTransactionNo("PM", entryForm.entry_date);
 
-        const passbookRecord = {
-          transaction_no: await getNextTransactionNo("PM", entryForm.entry_date),
-          transaction_date: entryForm.entry_date,
-          particulars: `Vendor Payment: ${vendorName} (${inwardNos})${deduction > 0 ? ` [Disc: ₹${deduction}]` : ""}`,
-          notes: `Vendor Payment: ${vendorName} (${inwardNos})`,
-          party_name: vendorName,
-          transaction_type: "Vendor Payment (-)",
-          type: "debit",
-          payment_in: 0,
-          payment_out: amount,
-          credit_amount: 0,
-          debit_amount: amount,
-          amount: amount,
-          payment_mode: entryForm.payment_mode,
-          account_id: entryForm.account_id ? Number(entryForm.account_id) : null,
-          remarks: entryForm.remarks || (deduction > 0 ? `Discount: ₹${deduction}` : ""),
-          ...payDetails,
-        };
-
-        const { error: bankErr } = await sc("bank_transactions").insert([passbookRecord]);
+        const { error: bankErr } = await sc("bank_transactions").insert([{ ...record, transaction_no }]);
         if (bankErr) throw bankErr;
 
-        // Bill statuses come from the ledger allocation (paid / disc / pending), the
-        // same source the table shows, so DB and screen never disagree.
         const statusById = new Map<number, PurchaseBill["status"]>();
-        selectedBills.forEach((p) => {
-          const billPending = Number(p.pending_amount ?? p.total_amount ?? 0);
-          const paidNow = hasExplicit ? Number(billAllocations[p.id] || 0) || 0 : billPending;
-          statusById.set(p.id, paidNow + deduction >= billPending - 0.005 ? "Paid" : "Partial");
-        });
+        statusUpdates.forEach((upd) => statusById.set(upd.bill_id, upd.status));
 
-        for (const [billId, status] of statusById) {
+        for (const upd of statusUpdates) {
           const { error: updateErr } = await sc("purchases")
-            .update({ status })
-            .eq("id", billId);
-          if (updateErr) console.error("Status update failed:", billId, updateErr);
+            .update({ status: upd.status })
+            .eq("id", upd.bill_id);
+          if (updateErr) console.error("Status update failed:", upd.bill_id, updateErr);
         }
 
         setPurchases((prev) =>
