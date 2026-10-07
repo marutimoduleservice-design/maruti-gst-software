@@ -1,4 +1,4 @@
-const CACHE_NAME = "maruti-service-shell-v3";
+const CACHE_NAME = "maruti-service-shell-v4";
 // "/" yahan isliye hai: SW pehli baar online visit par register hota hai, tab
 // tak navigation intercept nahi hui — install ke waqt index precache ho jata hai.
 // Online rehne par navigations network-first hote hain, isliye stale index ka
@@ -9,6 +9,7 @@ const APP_SHELL = [
   "/favicon.svg",
   "/icon-192.png",
   "/icon-512.png",
+  "/icon-maskable-512.png",
   "/apple-touch-icon-180.png",
 ];
 
