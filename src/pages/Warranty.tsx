@@ -286,7 +286,9 @@ function Warranty() {
         job_date: String(selectedJob.job_date || "").slice(0, 10),
         customer_name: selectedJob.business_name || null,
         warranty_module_date: form.warranty_module_date,
-        working_days: liveWorkingDays,
+        // Back date (module date job card se pehle) ho to bhi din positive
+        // store hote hain — minus sign user ko nahi chahiye.
+        working_days: Math.abs(liveWorkingDays),
         return_reason: form.return_reason,
         remark: form.remark.trim() || null,
       };
@@ -381,7 +383,7 @@ function Warranty() {
         job_date: String(job.job_date || "").slice(0, 10),
         customer_name: job.business_name || null,
         warranty_module_date: r.date,
-        working_days: days,
+        working_days: Math.abs(days),
         return_reason: r.reason,
         remark: r.remark.trim() || null,
       };
@@ -646,7 +648,7 @@ function Warranty() {
                             minWidth: 46,
                           }}
                         >
-                          {days} {days === 1 || days === -1 ? "day" : "days"}
+                          {Math.abs(days)} {Math.abs(days) === 1 ? "day" : "days"}
                         </span>
                       </td>
                       <td style={tdStyle}>
@@ -690,9 +692,9 @@ function Warranty() {
 
       <p style={{ color: "#94a3b8", fontSize: 11.5, marginTop: 14, lineHeight: 1.7 }}>
         Note: Warranty Module Date wo date hai jo module ke upar likhi hoti hai — isiliye ye manually daali jaati hai.
-        <strong> Working Day</strong> = Warranty Module Date − Job Card Date. Negative Working Day (grey chip) normal
-        hai — matlab module par pehle repair ki date likhi hai aur wo warranty me baad me aaya, isliye date job card se
-        purani hai; aisi date bhi bilkul sahi save hoti hai. Reason <em>A</em> ka matlab hai module
+        <strong> Working Day</strong> = Warranty Module Date − Job Card Date (hamesha positive dikhta hai).
+        Grey chip ka matlab hai module par pehle repair ki date likhi hai aur wo warranty me baad me aaya —
+        isliye date job card se purani (back date) hai; aisi entry bhi bilkul sahi save hoti hai. Reason <em>A</em> ka matlab hai module
         check karne par sab theek mila (warranty nahi, customer ne change/swap kar diya), <em>B</em> ka matlab
         customer side se damage hua, aur <em>C</em> ka matlab humari taraf se problem hai.
       </p>
@@ -897,7 +899,7 @@ function Warranty() {
                                     minWidth: 42,
                                   }}
                                 >
-                                  {days}d
+                                  {Math.abs(days)}d
                                 </span>
                               )}
                             </td>
@@ -1088,7 +1090,7 @@ function Warranty() {
                   >
                     {!selectedJob
                       ? "Job card chunein"
-                      : `${liveWorkingDays} ${liveWorkingDays === 1 || liveWorkingDays === -1 ? "day" : "days"}`}
+                      : `${Math.abs(liveWorkingDays)} ${Math.abs(liveWorkingDays) === 1 ? "day" : "days"}`}
                   </div>
                 </div>
               </div>
