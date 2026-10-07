@@ -13,7 +13,9 @@
 -- backfill purane vouchers ki lines yahan copy kar dega.
 --
 -- Notes:
---   * RLS enable nahi ki ja rahi (baaki app tables ki posture ke saath).
+--   * RLS enable rehta hai (project setting se nayi table default RLS-on banti
+--     hai) + `rls-enable-migration.sql` wala hi policy — logged-in user ko full
+--     access, bina login ke kuch nahi. Policy na ho to PostgREST 403 deta hai.
 --   * bank_transactions se FK nahi lagaya — id ka type mismatch hone ka khatra
 --     hai; app delete ke waqt khud is table ki rows hata deta hai.
 --   * invoice_id / purchase_id par FK nahi: invoice delete ho to payment ki
@@ -42,3 +44,11 @@ create index if not exists payment_allocations_purchase_idx
   on payment_allocations (purchase_id);
 create index if not exists payment_allocations_company_idx
   on payment_allocations (company_id);
+
+-- RLS: logged-in (authenticated) users ko full access — baaki
+-- supabase/rls-enable-migration.sql tables ke same pattern se.
+alter table payment_allocations enable row level security;
+
+drop policy if exists "rls_all_payment_allocations" on public.payment_allocations;
+create policy "rls_all_payment_allocations" on public.payment_allocations
+  for all to authenticated using (true) with check (true);
