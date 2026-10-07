@@ -123,10 +123,13 @@ begin
     nullif(v_old ->> 'id', '')::bigint
   );
 
-  -- Record ka business label: pehle trigger ka arg, phir common columns.
+  -- Record ka business label: pehle trigger ka arg (TG_ARGV[1] = label column),
+  -- phir common columns. NOTE: TG_ARGC naam ka variable PostgreSQL me nahi hai,
+  -- isliye sirf TG_ARGV array use hoti hai (triggers hamesha 2 args ke saath
+  -- ban rahi hain, neeche DO block me).
   v_label := coalesce(
-    case when tg_argc > 1 then v_new ->> tg_argv[1] end,
-    case when tg_argc > 1 then v_old ->> tg_argv[1] end,
+    v_new ->> tg_argv[1],
+    v_old ->> tg_argv[1],
     v_new ->> 'invoice_no',
     v_old ->> 'invoice_no',
     v_new ->> 'business_name',
