@@ -78,6 +78,9 @@ type LineItem = {
   editable: boolean;
   hsn_code?: string;
   gst_percent?: number | string;
+  // Edit mode me ye line DB me kitni saved hai. Available stock nikalte waqt
+  // is invoice ki apni billed qty wapas minus karni padti hai.
+  saved_quantity?: number;
 };
 
 function Invoices() {
@@ -374,8 +377,34 @@ if (repStats.pending > 0) {
   const getPurchaseLineKey = (purchase: Pick<PurchaseItem, "inward_no" | "item_code" | "item_name">) =>
     `${String(purchase.inward_no || "").trim().toLowerCase()}|${String(purchase.item_name || "").trim().toLowerCase()}`;
 
-  const getAvailablePurchaseQty = (purchase: PurchaseItem) =>
-    Math.max(0, Number(purchase.quantity || 0) - Number(soldByPurchaseLine[getPurchaseLineKey(purchase)] || 0));
+  // Ek inward line par kitna stock already gaya — DOOSRON ka saved sold +
+  // is invoice ki DOOSRI lines ki current qty. Apni saved qty (edit se pehle
+  // ki billed qty) minus hoti hai, warna apni hi qty stock me count hoke
+  // available kam dikhata tha (jaise 10 me se 4 khud ke bill par the aur
+  // system 6 bata raha tha, jabki asli available poora 10 tha).
+  const getSoldByOthers = (
+    purchase: Pick<PurchaseItem, "inward_no" | "item_code" | "item_name">,
+    excludeLineId?: string,
+    lines: LineItem[] = lineItems,
+  ) => {
+    const key = getPurchaseLineKey(purchase);
+    let ownSaved = 0;
+    let ownOthersCurrent = 0;
+    lines.forEach((line) => {
+      if (line.source !== "Spare Part" || !line.inward_no) return;
+      if (getPurchaseLineKey(line) !== key) return;
+      ownSaved += Number(line.saved_quantity || 0);
+      if (line.id !== excludeLineId) ownOthersCurrent += Number(line.quantity || 0);
+    });
+    const soldByOthers = Math.max(0, Number(soldByPurchaseLine[key] || 0) - ownSaved);
+    return soldByOthers + ownOthersCurrent;
+  };
+
+  const getAvailablePurchaseQty = (
+    purchase: PurchaseItem,
+    excludeLineId?: string,
+    lines: LineItem[] = lineItems,
+  ) => Math.max(0, Number(purchase.quantity || 0) - getSoldByOthers(purchase, excludeLineId, lines));
 
   const getPurchaseOptionValue = (purchase: Pick<PurchaseItem, "id" | "inward_no" | "item_code" | "item_name">) =>
     `${String(purchase.inward_no || "").trim().toLowerCase()}|${String(purchase.item_name || "").trim().toLowerCase()}`;
@@ -484,7 +513,7 @@ if (repStats.pending > 0) {
                 String(ps.id) === String(value) || getPurchaseOptionValue(ps) === String(value) || String(ps.inward_no) === String(value)
               );
               if (foundStock) {
-                const availableQty = getAvailablePurchaseQty(foundStock);
+                const availableQty = getAvailablePurchaseQty(foundStock, id);
                 updatedLine.inward_no = foundStock.inward_no;
                 updatedLine.purchase_line_id = foundStock.id;
                 updatedLine.item_id = String(foundStock.item_id || "");
@@ -519,9 +548,20 @@ if (repStats.pending > 0) {
             const qty = Number(value);
             if (!Number.isFinite(qty) || qty < 1) {
               updatedLine.quantity = 1;
-            } else if (updatedLine.source === "Spare Part" && qty > updatedLine.max_stock) {
-              alert(`Stock limit exceeded! Available stock is only ${updatedLine.max_stock}.`);
-              updatedLine.quantity = updatedLine.max_stock;
+            } else if (updatedLine.source === "Spare Part") {
+              // Har keystroke par live available dobara nikalo — editing me
+              // apni purani billed qty minus hoti hai, warna limit kam dikhti.
+              const stockRow = purchaseStock.find((ps) => String(ps.id) === String(updatedLine.purchase_line_id));
+              const liveAvailable = stockRow
+                ? getAvailablePurchaseQty(stockRow, id, prev)
+                : Number(updatedLine.max_stock || 0);
+              updatedLine.max_stock = liveAvailable;
+              if (qty > liveAvailable) {
+                alert(`Stock limit exceeded! Available stock is only ${liveAvailable}.`);
+                updatedLine.quantity = liveAvailable;
+              } else {
+                updatedLine.quantity = qty;
+              }
             } else if (updatedLine.source === "Repairing") {
               const jobCap = repairingCap;
               const otherRepairing = prev
@@ -588,30 +628,54 @@ if (repStats.pending > 0) {
       if (itemsError) throw itemsError;
 
       if (itemsData) {
-        const loadedLines: LineItem[] = itemsData.map((it: any) => ({
-          id: Math.random().toString(),
-          source: it.inward_no?.startsWith("JOB") ? (it.inward_no === "JOB-REP" ? "Repairing" : it.inward_no === "JOB-WAR" ? "Warranty" : "Reject") : "Spare Part",
-          inward_no: it.inward_no || "",
-          item_id: it.item_id ? String(it.item_id) : "",
-          item_code: it.item_code || "",
-          item_name: it.item_name,
-          quantity: it.quantity,
-          rate: it.rate,
-          total: it.total,
-          cost_rate: it.cost_rate || 0,
-          max_stock: it.inward_no?.startsWith("JOB") ? 999 : Math.max(
-            Number(purchaseStock.find((purchase) =>
-              String(purchase.inward_no || "") === String(it.inward_no || "") &&
-              String(purchase.item_code || purchase.item_name || "").trim().toLowerCase() === String(it.item_code || it.item_name || "").trim().toLowerCase()
-            )?.quantity || 0),
-            Number(it.quantity || 0)
-          ),
-          purchase_line_id: purchaseStock.find((purchase) =>
-            String(purchase.inward_no) === String(it.inward_no || "") &&
+        // Is invoice ki per-inward saved qty — dusre invoices ka sold alag se
+        // already `soldByPurchaseLine` me hai, isliye apni qty minus karni hai.
+        const ownSavedByKey: Record<string, number> = {};
+        itemsData.forEach((it: any) => {
+          if (!it.inward_no || String(it.inward_no).startsWith("JOB-")) return;
+          const lineKey = getPurchaseLineKey({
+            inward_no: it.inward_no,
+            item_code: it.item_code || "",
+            item_name: it.item_name || "",
+          });
+          ownSavedByKey[lineKey] = (ownSavedByKey[lineKey] || 0) + Number(it.quantity || 0);
+        });
+
+        const loadedLines: LineItem[] = itemsData.map((it: any) => {
+          const isJobLine = Boolean(it.inward_no?.startsWith("JOB"));
+          const lineKey = getPurchaseLineKey({
+            inward_no: it.inward_no || "",
+            item_code: it.item_code || "",
+            item_name: it.item_name || "",
+          });
+          const matchedStock = purchaseStock.find((purchase) =>
+            String(purchase.inward_no || "") === String(it.inward_no || "") &&
             String(purchase.item_code || purchase.item_name || "").trim().toLowerCase() === String(it.item_code || it.item_name || "").trim().toLowerCase()
-          )?.id,
-          editable: !it.inward_no?.startsWith("JOB") || it.inward_no === "JOB-REP"
-        }));
+          );
+          const lineQty = Number(it.quantity || 0);
+          // Available = inward stock − doosron ka sold − is invoice ki baaki lines.
+          const soldByOthers = Math.max(0, Number(soldByPurchaseLine[lineKey] || 0) - Number(ownSavedByKey[lineKey] || 0));
+          const ownOtherLines = Math.max(0, Number(ownSavedByKey[lineKey] || 0) - lineQty);
+          const computedMax = matchedStock
+            ? Math.max(0, Number(matchedStock.quantity || 0) - soldByOthers - ownOtherLines)
+            : 0;
+          return {
+            id: Math.random().toString(),
+            source: isJobLine ? (it.inward_no === "JOB-REP" ? "Repairing" : it.inward_no === "JOB-WAR" ? "Warranty" : "Reject") : "Spare Part",
+            inward_no: it.inward_no || "",
+            item_id: it.item_id ? String(it.item_id) : "",
+            item_code: it.item_code || "",
+            item_name: it.item_name,
+            quantity: it.quantity,
+            rate: it.rate,
+            total: it.total,
+            cost_rate: it.cost_rate || 0,
+            saved_quantity: lineQty,
+            max_stock: isJobLine ? 999 : Math.max(computedMax, lineQty),
+            purchase_line_id: matchedStock?.id,
+            editable: !it.inward_no?.startsWith("JOB") || it.inward_no === "JOB-REP"
+          };
+        });
         setLineItems(loadedLines);
       }
 
@@ -1016,7 +1080,7 @@ const handleDeleteInvoice = async (inv: Invoice) => {
                     >
                       <option value="">Select Purchase Item from Stock</option>
                       {purchaseStock
-                        .map((ps) => ({ purchase: ps, availableQty: getAvailablePurchaseQty(ps) }))
+                        .map((ps) => ({ purchase: ps, availableQty: getAvailablePurchaseQty(ps, item.id) }))
                         .filter(({ availableQty }) => availableQty > 0)
                         .sort((a, b) =>
                           String(a.purchase.item_name || "").trim().toLowerCase()
