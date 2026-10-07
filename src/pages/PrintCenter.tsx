@@ -954,7 +954,17 @@ function PrintCenter() {
       r.pending += Number(iv.pending_amount ?? iv.total_amount ?? 0);
     });
 
-    const partyRows = Array.from(map.values()).sort((a: any, b: any) => b.pending - a.pending);
+    // Sirf un parties ko rakho jinka kuch pending hai — fully paid (Pending ₹0)
+    // wale is "Total Pending Report" me nahi chahiye.
+    const partyRows = Array.from(map.values())
+      .filter((r: any) => r.pending > 0.00001)
+      .sort((a: any, b: any) => b.pending - a.pending);
+
+    if (partyRows.length === 0) {
+      alert(`इस Financial Year (${ledgerFY}) में कोई pending amount नहीं है — सभी bills paid हैं।`);
+      return null;
+    }
+
     const tBills = partyRows.reduce((s: number, r: any) => s + r.bills, 0);
     const tBilled = partyRows.reduce((s: number, r: any) => s + r.billed, 0);
     const tReceived = partyRows.reduce((s: number, r: any) => s + r.received, 0);
