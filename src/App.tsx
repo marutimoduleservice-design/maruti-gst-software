@@ -8,8 +8,10 @@ import { computeProfitMonthly, profitTotals } from "./lib/profitCalc";
 import { computeStockValue } from "./lib/stockValue";
 import { isTransferRow } from "./lib/bankAccounts";
 import { currentFY } from "./lib/financialYear";
+import { allowedMenus, canOpen, roleLabel, type AppUser } from "./lib/roles";
 import "./App.css";
 import Login from "./pages/Login";
+import UsersRoles from "./pages/UsersRoles";
 
 // Operational Pages
 import Customers from "./pages/Customers";
@@ -77,6 +79,14 @@ const reportSubItems: MenuItem[] = [
 function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [appUser, setAppUser] = useState<AppUser | null>(null);
+  const [roleLoading, setRoleLoading] = useState(true);
+  // Migration abhi nahi chali hai to sabko "run the SQL" wala screen dikhao,
+  // warna sab users "No Role" se block ho jayenge.
+  const [migrationPending, setMigrationPending] = useState(false);
+  // SIGNED_IN event par true hota hai; role load hone ke baad ek baar
+  // login_events me record karke phir se false. (Refresh par record nahi.)
+  const loginEventPending = useRef(false);
   const [recoveryMode, setRecoveryMode] = useState(false);
   const [activeMenu, setActiveMenu] = useState("Dashboard");
   const [mastersOpen, setMastersOpen] = useState(false);
@@ -123,6 +133,7 @@ function App() {
 
     const { data: authListener } = supabase.auth.onAuthStateChange((event, nextSession) => {
       setSession(nextSession);
+      if (event === "SIGNED_IN") loginEventPending.current = true;
       if (event === "PASSWORD_RECOVERY") setRecoveryMode(true);
       setAuthLoading(false);
     });
@@ -132,6 +143,114 @@ function App() {
       authListener.subscription.unsubscribe();
     };
   }, []);
+
+  // Role profile load: session ke hisaab se app_users me dhoondho.
+  // Table khaali hai to pehla login user Admin ban jaata hai (bootstrap).
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadProfile = async () => {
+      if (!session) {
+        if (!cancelled) {
+          setAppUser(null);
+          setRoleLoading(false);
+        }
+        loginEventPending.current = false;
+        return;
+      }
+      setRoleLoading(true);
+      const uid = session.user.id;
+      const email = String(session.user.email || "").toLowerCase();
+
+      try {
+        const { data: rows, error } = await sc("app_users")
+          .select("*")
+          .or(`auth_user_id.eq.${uid},email.eq.${email}`);
+        if (error) throw error;
+        setMigrationPending(false);
+
+        let profile: AppUser | null = ((rows || []) as AppUser[])[0] || null;
+
+        if (!profile) {
+          // Table khaali hai? Bootstrap: pehla login user = Admin.
+          const { count } = await sc("app_users").select("id", { count: "exact", head: true });
+          if (count === 0) {
+            const boot: AppUser = {
+              id: 0,
+              auth_user_id: uid,
+              email,
+              full_name: String((session.user.user_metadata as any)?.full_name || session.user.email || "Admin"),
+              role: "admin",
+              technician_id: null,
+              active: true,
+            };
+            const { data: inserted, error: insertErr } = await sc("app_users")
+              .insert({ auth_user_id: uid, email, full_name: boot.full_name, role: "admin" })
+              .select("*")
+              .single();
+            if (!insertErr && inserted) profile = inserted as AppUser;
+            else {
+              // Insert fail = lockout ka risk. Session ke liye admin maano, error log karo.
+              console.error("Admin bootstrap insert fail:", insertErr?.message);
+              profile = boot;
+            }
+          }
+        } else if (!profile.auth_user_id) {
+          // Profile email se mili par auth uid link nahi — abhi link karo.
+          const { error: claimErr } = await supabase.rpc("claim_app_user");
+          if (claimErr) console.warn("claim_app_user fail:", claimErr.message);
+          profile = { ...profile, auth_user_id: uid };
+        }
+
+        if (cancelled) return;
+
+        if (!profile) {
+          setAppUser(null);
+        } else {
+          setAppUser(profile);
+          if (loginEventPending.current) {
+            loginEventPending.current = false;
+            const { error: logErr } = await supabase.from("login_events").insert({
+              auth_user_id: uid,
+              email,
+              full_name: profile.full_name || "",
+              role: profile.role,
+              user_agent: navigator.userAgent,
+            });
+            if (logErr) console.warn("login_events insert fail:", logErr.message);
+          }
+        }
+      } catch (error: any) {
+        console.error("Role profile load fail:", error);
+        const code = String(error?.code || "");
+        const msg = String(error?.message || "");
+        if (
+          code === "42P01" ||
+          code === "PGRST205" ||
+          /does not exist|schema cache/i.test(msg)
+        ) {
+          setMigrationPending(true);
+        }
+        if (!cancelled) setAppUser(null);
+      } finally {
+        if (!cancelled) setRoleLoading(false);
+      }
+    };
+
+    loadProfile();
+    return () => {
+      cancelled = true;
+    };
+  }, [session]);
+
+  // Role/permission ke hisaab se activeMenu ko allowed menu par wapas lao
+  // (jaise Dashboard ke quick action se koi restricted page khul jaye).
+  useEffect(() => {
+    if (roleLoading || !appUser) return;
+    if (!canOpen(appUser.role, activeMenu)) {
+      setActiveMenu(allowedMenus(appUser.role)[0] || "Dashboard");
+    }
+  }, [roleLoading, appUser, activeMenu]);
 
   useEffect(() => {
     if (session) fetchDashboardStats();
@@ -166,7 +285,7 @@ function App() {
     setCompanyId(company.id);
     setCurrentCompany(company);
     setSwitcherOpen(false);
-    setActiveMenu("Dashboard");
+    selectMenu("Dashboard");
     fetchDashboardStats();
   };
 
@@ -383,17 +502,36 @@ function App() {
   const isMasterActive = masterSubItems.some((item) => item.name === activeMenu);
   const isReportActive = reportSubItems.some((item) => item.name === activeMenu);
 
+  // Role ke hisaab se dikhne wale menus.
+  const roleMenus = allowedMenus(appUser?.role);
+  const visibleMasters = masterSubItems.filter((item) => roleMenus.includes(item.name));
+  const visibleReports = reportSubItems.filter((item) => roleMenus.includes(item.name));
+
   const handleLogout = async () => {
     const { error } = await supabase.auth.signOut();
     if (error) console.error("Logout error:", error);
   };
 
   const selectMenu = (menuName: string) => {
+    // Role allow nahi karta to menu switch hi mat karo.
+    if (appUser && !canOpen(appUser.role, menuName)) return;
     setActiveMenu(menuName);
     if (window.innerWidth <= 700) setSidebarCollapsed(true);
   };
 
   const renderContent = () => {
+    // Role ke allow kiye menus ke bahar kuch bhi render mat karo.
+    if (appUser && !canOpen(appUser.role, activeMenu)) {
+      return (
+        <div className="page-title">
+          <div>
+            <h1>Access Denied</h1>
+            <p>Aapke role ({roleLabel(appUser.role)}) ke liye ye page allowed nahi hai.</p>
+          </div>
+        </div>
+      );
+    }
+
     // 1. Dashboard
     if (activeMenu === "Dashboard") {
       const d = dash;
@@ -406,7 +544,7 @@ function App() {
             </div>
             <div style={{ display: "flex", gap: 10 }}>
               <button className="primary-button" onClick={fetchDashboardStats}>Refresh</button>
-              <button className="primary-button" onClick={() => setActiveMenu("Module Repair")}>+ New Job Card</button>
+              <button className="primary-button" onClick={() => selectMenu("Module Repair")}>+ New Job Card</button>
             </div>
           </div>
 
@@ -496,14 +634,14 @@ function App() {
                 <div><h2>Quick Actions</h2><p>Frequently used</p></div>
               </div>
               <div className="dash-quick-grid">
-                <button onClick={() => setActiveMenu("Module Repair")}><span>🔧</span><div><strong>New Job Card</strong><small>Module repair</small></div></button>
-                <button onClick={() => setActiveMenu("Sales / Invoice")}><span>🧾</span><div><strong>Create Invoice</strong><small>Sell spare parts</small></div></button>
-                <button onClick={() => setActiveMenu("Purchase")}><span>📦</span><div><strong>New Purchase</strong><small>Stock inward</small></div></button>
-                <button onClick={() => setActiveMenu("Bank Passbook & Expenses")}><span>💰</span><div><strong>Bank / Expense</strong><small>Record payment</small></div></button>
-                <button onClick={() => setActiveMenu("Customers")}><span>👥</span><div><strong>Customers</strong><small>Manage list</small></div></button>
-                <button onClick={() => setActiveMenu("Payments / Ledger")}><span>₹</span><div><strong>Payments</strong><small>Ledger view</small></div></button>
-                <button onClick={() => setActiveMenu("Stock Report")}><span>📊</span><div><strong>Stock Report</strong><small>Live inventory</small></div></button>
-                <button onClick={() => setActiveMenu("Net Profit Report")}><span>💵</span><div><strong>Profit Report</strong><small>P&L statement</small></div></button>
+                <button onClick={() => selectMenu("Module Repair")}><span>🔧</span><div><strong>New Job Card</strong><small>Module repair</small></div></button>
+                <button onClick={() => selectMenu("Sales / Invoice")}><span>🧾</span><div><strong>Create Invoice</strong><small>Sell spare parts</small></div></button>
+                <button onClick={() => selectMenu("Purchase")}><span>📦</span><div><strong>New Purchase</strong><small>Stock inward</small></div></button>
+                <button onClick={() => selectMenu("Bank Passbook & Expenses")}><span>💰</span><div><strong>Bank / Expense</strong><small>Record payment</small></div></button>
+                <button onClick={() => selectMenu("Customers")}><span>👥</span><div><strong>Customers</strong><small>Manage list</small></div></button>
+                <button onClick={() => selectMenu("Payments / Ledger")}><span>₹</span><div><strong>Payments</strong><small>Ledger view</small></div></button>
+                <button onClick={() => selectMenu("Stock Report")}><span>📊</span><div><strong>Stock Report</strong><small>Live inventory</small></div></button>
+                <button onClick={() => selectMenu("Net Profit Report")}><span>💵</span><div><strong>Profit Report</strong><small>P&L statement</small></div></button>
               </div>
             </div>
           </div>
@@ -513,7 +651,7 @@ function App() {
             <div className="panel">
               <div className="panel-header">
                 <div><h2>Recent Invoices</h2><p>Last 5 sales</p></div>
-                <button className="link-button" onClick={() => setActiveMenu("Sales Report")}>View All →</button>
+                <button className="link-button" onClick={() => selectMenu("Sales Report")}>View All →</button>
               </div>
               {d.recentInvoices.length === 0 ? (
                 <div className="empty-state"><div>🧾</div><h3>No invoices yet</h3><p>Create your first invoice to see it here.</p></div>
@@ -539,7 +677,7 @@ function App() {
             <div className="panel">
               <div className="panel-header">
                 <div><h2>Recent Purchases</h2><p>Last 5 inward entries</p></div>
-                <button className="link-button" onClick={() => setActiveMenu("Purchase Report")}>View All →</button>
+                <button className="link-button" onClick={() => selectMenu("Purchase Report")}>View All →</button>
               </div>
               {d.recentPurchases.length === 0 ? (
                 <div className="empty-state"><div>📦</div><h3>No purchases yet</h3><p>Record your first purchase to see it here.</p></div>
@@ -567,7 +705,7 @@ function App() {
           <div className="panel" style={{ marginBottom: 16 }}>
             <div className="panel-header">
               <div><h2>🏆 Top 10 Customers By Sale</h2><p>Highest billing customers this period</p></div>
-              <button className="link-button" onClick={() => setActiveMenu("Customers")}>View All →</button>
+              <button className="link-button" onClick={() => selectMenu("Customers")}>View All →</button>
             </div>
             {d.topCustomersBySale.length === 0 ? (
               <div className="empty-state"><div>👥</div><h3>No sale data yet</h3><p>Create invoices to see your top customers here.</p></div>
@@ -607,7 +745,7 @@ function App() {
             <div className="panel">
               <div className="panel-header">
                 <div><h2>Low Stock Alert</h2><p>Items below minimum stock level</p></div>
-                <button className="link-button" onClick={() => setActiveMenu("Stock Report")}>View Stock →</button>
+                <button className="link-button" onClick={() => selectMenu("Stock Report")}>View Stock →</button>
               </div>
               <div className="dash-table-wrap">
                 <table className="dash-table">
@@ -632,7 +770,14 @@ function App() {
 
     // 2. Operational Pages
     if (activeMenu === "Customers") return <Customers />;
-    if (activeMenu === "Module Repair") return <JobCards />;
+    if (activeMenu === "Module Repair")
+      return (
+        <JobCards
+          technicianScopeId={
+            appUser && appUser.role === "technician" ? appUser.technician_id : undefined
+          }
+        />
+      );
     if (activeMenu === "Sales / Invoice") return <Invoices />;
     if (activeMenu === "Purchase") return <Purchase />;
     if (activeMenu === "Payments / Ledger") return <PaymentsLedger />;
@@ -657,6 +802,9 @@ function App() {
   if (activeMenu === "Worker Salary") return <SalaryReport />;
     if (activeMenu === "Item Wise Qty In Out Report") return <ItemWiseQtyInOutReport />;
 
+    // 5. Users & Roles (admin only)
+    if (activeMenu === "Users & Roles") return <UsersRoles currentUid={session?.user.id || ""} />;
+
     return (
       <div className="page-title">
         <div>
@@ -679,6 +827,54 @@ function App() {
 
   if (recoveryMode) {
     return <PasswordRecovery onComplete={() => setRecoveryMode(false)} />;
+  }
+
+  if (roleLoading) {
+    return <div className="auth-loading-screen">Loading your access role...</div>;
+  }
+
+  if (migrationPending) {
+    return (
+      <AccessBlocked
+        title="Setup Pending"
+        message="Role system ka database migration abhi chalna baaki hai. Admin ko 'supabase/user-roles-migration.sql' file Supabase SQL Editor me chalani hogi."
+        onLogout={handleLogout}
+      />
+    );
+  }
+
+  if (!appUser) {
+    return (
+      <AccessBlocked
+        title="No Role Assigned"
+        message="Is email ke liye koi role assign nahi hua hai. Admin se 'Users & Roles' page par role assign karwaein, phir login karein."
+        onLogout={handleLogout}
+      />
+    );
+  }
+
+  if (!appUser.active) {
+    return (
+      <AccessBlocked
+        title="Access Disabled"
+        message="Aapka access deactivate kar diya gaya hai. Admin se sampark karein."
+        onLogout={handleLogout}
+      />
+    );
+  }
+
+  if (allowedMenus(appUser.role).length === 0) {
+    return (
+      <AccessBlocked
+        title={appUser.role === "pending" ? "Awaiting Approval" : "No Role Assigned"}
+        message={
+          appUser.role === "pending"
+            ? "Aapki profile ban gayi hai, par abhi tak role assign nahi hua. Admin ko 'Users & Roles' par role dena baaki hai."
+            : "Abhi aapko koi menu allow nahi hua hai. Admin se role assign karwaein."
+        }
+        onLogout={handleLogout}
+      />
+    );
   }
 
   if (companiesLoading) {
@@ -721,7 +917,9 @@ function App() {
         <div className="menu-title">MAIN MENU</div>
 
         <nav className="navigation" ref={navigationRef}>
-          {mainMenuItems.map((item) => (
+          {mainMenuItems
+            .filter((item) => roleMenus.includes(item.name))
+            .map((item) => (
             <button
               key={item.name}
               className={`menu-item ${activeMenu === item.name ? "active" : ""}`}
@@ -733,6 +931,7 @@ function App() {
           ))}
 
           {/* MASTER RECORDS ACCORDION */}
+          {visibleMasters.length > 0 && (
           <div style={{ margin: "4px 0" }}>
             <button
               className={`menu-item ${isMasterActive ? "active" : ""}`}
@@ -770,7 +969,7 @@ function App() {
                   gap: 3,
                 }}
               >
-                {masterSubItems.map((sub) => (
+                {visibleMasters.map((sub) => (
                   <button
                     key={sub.name}
                     className={`menu-item ${activeMenu === sub.name ? "active" : ""}`}
@@ -788,8 +987,10 @@ function App() {
               </div>
             )}
           </div>
+          )}
 
           {/* REPORTS ACCORDION */}
+          {visibleReports.length > 0 && (
           <div style={{ margin: "4px 0" }}>
             <button
               className={`menu-item ${isReportActive ? "active" : ""}`}
@@ -827,7 +1028,7 @@ function App() {
                   gap: 3,
                 }}
               >
-                {reportSubItems.map((sub) => (
+                {visibleReports.map((sub) => (
                   <button
                     key={sub.name}
                     className={`menu-item ${activeMenu === sub.name ? "active" : ""}`}
@@ -845,6 +1046,7 @@ function App() {
               </div>
             )}
           </div>
+          )}
         </nav>
 
         <div className="sidebar-controls">
@@ -864,19 +1066,31 @@ function App() {
         </div>
 
         <div className="sidebar-bottom">
-          <button
-            className={`menu-item ${activeMenu === "Settings" ? "active" : ""}`}
-            onClick={() => selectMenu("Settings")}
-          >
-            <span className="menu-icon">⚙</span>
-            <span>Settings</span>
-          </button>
+          {roleMenus.includes("Settings") && (
+            <button
+              className={`menu-item ${activeMenu === "Settings" ? "active" : ""}`}
+              onClick={() => selectMenu("Settings")}
+            >
+              <span className="menu-icon">⚙</span>
+              <span>Settings</span>
+            </button>
+          )}
+
+          {roleMenus.includes("Users & Roles") && (
+            <button
+              className={`menu-item ${activeMenu === "Users & Roles" ? "active" : ""}`}
+              onClick={() => selectMenu("Users & Roles")}
+            >
+              <span className="menu-icon">👥</span>
+              <span>Users & Roles</span>
+            </button>
+          )}
 
           <div className="user-box">
-            <div className="user-avatar">M</div>
+            <div className="user-avatar">{(appUser.full_name || session.user.email || "U").charAt(0).toUpperCase()}</div>
             <div>
-              <strong>Administrator</strong>
-              <span>{session.user.email || "Admin User"}</span>
+              <strong>{roleLabel(appUser.role)}</strong>
+              <span>{appUser.full_name || session.user.email || "User"}</span>
             </div>
             <button
               type="button"
@@ -1409,6 +1623,79 @@ function PasswordField({
           }}
         >
           {visible ? "Hide" : "Show"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AccessBlocked({
+  title,
+  message,
+  onLogout,
+}: {
+  title: string;
+  message: string;
+  onLogout: () => void;
+}) {
+  return (
+    <div
+      style={{
+        minHeight: "100vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "#f5f7fb",
+        padding: 20,
+        boxSizing: "border-box",
+      }}
+    >
+      <div
+        style={{
+          width: "100%",
+          maxWidth: 430,
+          background: "#fff",
+          padding: 30,
+          borderRadius: 14,
+          boxShadow: "0 0 24px rgba(15,23,42,0.10)",
+          textAlign: "center",
+          boxSizing: "border-box",
+        }}
+      >
+        <div
+          style={{
+            width: 64,
+            height: 64,
+            margin: "0 auto 14px",
+            borderRadius: 16,
+            background: "linear-gradient(145deg, #f97316, #c2410c)",
+            color: "#fff",
+            display: "grid",
+            placeItems: "center",
+            fontSize: 30,
+            fontWeight: 900,
+          }}
+        >
+          🔒
+        </div>
+        <h1 style={{ margin: 0, color: "#0f172a", fontSize: 21 }}>{title}</h1>
+        <p style={{ color: "#64748b", fontSize: 14, lineHeight: 1.6, margin: "10px 0 20px" }}>{message}</p>
+        <button
+          type="button"
+          onClick={onLogout}
+          style={{
+            width: "100%",
+            padding: 12,
+            background: "#0B5ED7",
+            color: "#fff",
+            border: "none",
+            borderRadius: 8,
+            fontWeight: 700,
+            fontSize: 14,
+            cursor: "pointer",
+          }}
+        >
+          Logout
         </button>
       </div>
     </div>

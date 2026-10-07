@@ -153,7 +153,7 @@ const initialForm = (): FormState => ({
   module_image_url: "",
 });
 
-function JobCards() {
+function JobCards({ technicianScopeId }: { technicianScopeId?: number | null } = {}) {
   const [customers, setCustomers] = useState<Customer[]>(() => {
     const cached = localStorage.getItem("cache_customers");
     return cached ? JSON.parse(cached) : [];
@@ -798,7 +798,28 @@ function JobCards() {
 
   const filteredJobs =
     useMemo(() => {
-      return jobs.filter(
+      // Technician role: sirf apne assign kiye hue job cards dikhenge.
+      // technicianScopeId undefined = non-technician user (sab dikhenge).
+      const scopedJobs =
+        technicianScopeId === undefined
+          ? jobs
+          : jobs.filter((job) => {
+              if (!technicianScopeId) return false;
+              const assigned = (assignments[job.id] || []).some(
+                (a) => Number(a.technician_id) === Number(technicianScopeId)
+              );
+              if (assigned) return true;
+              // Purane cards me technician sirf text column me likha hota tha.
+              const tech = technicians.find((t) => Number(t.id) === Number(technicianScopeId));
+              const legacy = String(job.technician || "").trim();
+              if (!tech?.name || !legacy) return false;
+              return legacy
+                .split(",")
+                .map((n) => n.trim().toLowerCase())
+                .includes(String(tech.name).trim().toLowerCase());
+            });
+
+      return scopedJobs.filter(
         (job) => {
           const term =
             search
@@ -881,6 +902,9 @@ function JobCards() {
       customerFilter,
       statusFilter,
       dateFilter,
+      technicianScopeId,
+      assignments,
+      technicians,
     ]);
 
   const jobCols = {
@@ -1068,15 +1092,17 @@ function JobCards() {
           </div>
         </div>
 
-        <button
-          className="customer-primary-button"
-          onClick={openNew}
-          disabled={Boolean(
-            schemaError
-          )}
-        >
-          ＋ New Job Card
-        </button>
+        {technicianScopeId === undefined && (
+          <button
+            className="customer-primary-button"
+            onClick={openNew}
+            disabled={Boolean(
+              schemaError
+            )}
+          >
+            ＋ New Job Card
+          </button>
+        )}
       </div>
 
       {/* =================================================
@@ -1314,6 +1340,26 @@ function JobCards() {
           </div>
         </div>
 
+        {/* Technician scope notice — sirf apne job cards */}
+        {technicianScopeId !== undefined && (
+          <div
+            style={{
+              margin: "0 0 14px",
+              padding: "10px 14px",
+              background: technicianScopeId ? "#eff6ff" : "#fef2f2",
+              border: `1px solid ${technicianScopeId ? "#bfdbfe" : "#fecaca"}`,
+              borderRadius: 8,
+              color: technicianScopeId ? "#1d4ed8" : "#b91c1c",
+              fontSize: 13,
+              fontWeight: 600,
+            }}
+          >
+            {technicianScopeId
+              ? "🔒 Sirf aapko assign kiye gaye job cards dikh rahe hain."
+              : "🔒 Aapki Technician link abhi assign nahi hui — Admin ko 'Users & Roles' me apna Technician link karne ko kahein."}
+          </div>
+        )}
+
         {/* TABLE */}
 
         {loading ? (
@@ -1366,16 +1412,19 @@ function JobCards() {
                 marginBottom: 20,
               }}
             >
-              Create your first Job
-              Card.
+              {technicianScopeId === undefined
+                ? "Create your first Job Card."
+                : "Aapko abhi tak koi Job Card assign nahi hua hai."}
             </p>
 
-            <button
-              className="customer-primary-button"
-              onClick={openNew}
-            >
-              ＋ New Job Card
-            </button>
+            {technicianScopeId === undefined && (
+              <button
+                className="customer-primary-button"
+                onClick={openNew}
+              >
+                ＋ New Job Card
+              </button>
+            )}
           </div>
         ) : (
           <div
