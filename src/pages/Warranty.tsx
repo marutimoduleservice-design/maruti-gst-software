@@ -261,12 +261,10 @@ function Warranty() {
       alert("Warranty Module Date daalein (module par likhi hui date).");
       return;
     }
-    if (liveWorkingDays < 0) {
-      alert(
-        "Warranty Module Date Job Card Date se pehle hai — date check karein (module par likhi date aur job card ki date mila kar dekhein)."
-      );
-      return;
-    }
+    // Note: Warranty Module Date Job Card Date se PEHLE ki bhi ho sakti hai —
+    // purane repair kiye module warranty me wapas aate hain, to module par
+    // likhi date (back date) hamesha nayi job card date se purani hoti hai.
+    // Isliye negative Working Day ko block nahi kiya jaata.
 
     // Job card ke wahan ke purane count se pata lagao ki ek nayi entry ban rahi
     // hai ya edit. Warranty qty se zyada entry na ho jaaye.
@@ -354,17 +352,8 @@ function Warranty() {
       return;
     }
 
-    for (let i = 0; i < bulkRows.length; i++) {
-      if (!bulkRows[i].date) continue;
-      if (daysBetween(String(job.job_date || ""), bulkRows[i].date) < 0) {
-        alert(
-          `Line ${i + 1}: Warranty Module Date (${bulkRows[i].date}) Job Card Date (${String(
-            job.job_date || ""
-          ).slice(0, 10)}) se pehle hai. Date theek karein.`
-        );
-        return;
-      }
-    }
+    // Purane module ki back date job card se pehle ki ho sakti hai — wo valid
+    // hai, isliye yahan koi date-wise block nahi hai (Working Day negative aayega).
 
     const remaining = (Number(job.warranty_quantity) || 0) - (loggedByJob[job.id] || 0);
     if (filled.length > remaining) {
@@ -647,8 +636,8 @@ function Warranty() {
                       <td style={{ ...tdStyle, textAlign: "center" }}>
                         <span
                           style={{
-                            background: days <= 7 ? "#dcfce7" : days <= 30 ? "#fef3c7" : "#fee2e2",
-                            color: days <= 7 ? "#166534" : days <= 30 ? "#92400e" : "#991b1b",
+                            background: days < 0 ? "#f1f5f9" : days <= 7 ? "#dcfce7" : days <= 30 ? "#fef3c7" : "#fee2e2",
+                            color: days < 0 ? "#475569" : days <= 7 ? "#166534" : days <= 30 ? "#92400e" : "#991b1b",
                             padding: "4px 11px",
                             borderRadius: 20,
                             fontSize: 12,
@@ -657,7 +646,7 @@ function Warranty() {
                             minWidth: 46,
                           }}
                         >
-                          {days} {days === 1 ? "day" : "days"}
+                          {days} {days === 1 || days === -1 ? "day" : "days"}
                         </span>
                       </td>
                       <td style={tdStyle}>
@@ -701,7 +690,9 @@ function Warranty() {
 
       <p style={{ color: "#94a3b8", fontSize: 11.5, marginTop: 14, lineHeight: 1.7 }}>
         Note: Warranty Module Date wo date hai jo module ke upar likhi hoti hai — isiliye ye manually daali jaati hai.
-        <strong> Working Day</strong> = Warranty Module Date − Job Card Date. Reason <em>A</em> ka matlab hai module
+        <strong> Working Day</strong> = Warranty Module Date − Job Card Date. Negative Working Day (grey chip) normal
+        hai — matlab module par pehle repair ki date likhi hai aur wo warranty me baad me aaya, isliye date job card se
+        purani hai; aisi date bhi bilkul sahi save hoti hai. Reason <em>A</em> ka matlab hai module
         check karne par sab theek mila (warranty nahi, customer ne change/swap kar diya), <em>B</em> ka matlab
         customer side se damage hua, aur <em>C</em> ka matlab humari taraf se problem hai.
       </p>
@@ -869,7 +860,6 @@ function Warranty() {
                       {bulkRows.map((row, idx) => {
                         const days =
                           bulkJob && row.date ? daysBetween(String(bulkJob.job_date || ""), row.date) : null;
-                        const invalid = days !== null && days < 0;
 
                         return (
                           <tr key={idx} style={{ borderBottom: "1px solid #f1f5f9", fontSize: 13 }}>
@@ -888,20 +878,17 @@ function Warranty() {
                                 style={{
                                   ...inputStyle,
                                   marginTop: 0,
-                                  borderColor: invalid ? "#fca5a5" : "#cbd5e1",
                                 }}
                               />
                             </td>
                             <td style={{ ...tdStyle, textAlign: "center" }}>
                               {days === null ? (
                                 <span style={{ color: "#cbd5e1" }}>—</span>
-                              ) : invalid ? (
-                                <span style={{ color: "#b91c1c", fontWeight: 800, fontSize: 11.5 }}>Galat date</span>
                               ) : (
                                 <span
                                   style={{
-                                    background: days <= 7 ? "#dcfce7" : days <= 30 ? "#fef3c7" : "#fee2e2",
-                                    color: days <= 7 ? "#166534" : days <= 30 ? "#92400e" : "#991b1b",
+                                    background: days < 0 ? "#f1f5f9" : days <= 7 ? "#dcfce7" : days <= 30 ? "#fef3c7" : "#fee2e2",
+                                    color: days < 0 ? "#475569" : days <= 7 ? "#166534" : days <= 30 ? "#92400e" : "#991b1b",
                                     padding: "3px 9px",
                                     borderRadius: 20,
                                     fontSize: 11.5,
@@ -1089,7 +1076,7 @@ function Warranty() {
                       fontWeight: 800,
                       color:
                         liveWorkingDays < 0
-                          ? "#b91c1c"
+                          ? "#475569"
                           : liveWorkingDays <= 7
                           ? "#15803d"
                           : liveWorkingDays <= 30
@@ -1101,9 +1088,7 @@ function Warranty() {
                   >
                     {!selectedJob
                       ? "Job card chunein"
-                      : liveWorkingDays < 0
-                      ? "Date galat hai (negative)"
-                      : `${liveWorkingDays} ${liveWorkingDays === 1 ? "day" : "days"}`}
+                      : `${liveWorkingDays} ${liveWorkingDays === 1 || liveWorkingDays === -1 ? "day" : "days"}`}
                   </div>
                 </div>
               </div>
