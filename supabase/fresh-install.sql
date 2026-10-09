@@ -2396,20 +2396,22 @@ alter table public.warranty_returns add column if not exists company_id bigint n
 --    tak koi policy hi nahi bani hai uspar logged-in user ko full access.
 --    (audit_log jin tables par apni policy already le chuka hai unhe chhodta hai.)
 do $$
-declare t text;
+declare
+  t text;
+  tbls text[];
 begin
-  foreach t in array (
-    select c.relname::text
-      from pg_class c
-      join pg_namespace n on n.oid = c.relnamespace
-     where n.nspname = 'public'
-       and c.relkind = 'r'
-       and not exists (
-         select 1 from pg_policies p
-          where p.schemaname = 'public' and p.tablename = c.relname
-       )
-     order by c.relname
-  )
+  select coalesce(array_agg(c.relname::text), array[]::text[])
+    into tbls
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+   where n.nspname = 'public'
+     and c.relkind = 'r'
+     and not exists (
+       select 1 from pg_policies p
+        where p.schemaname = 'public' and p.tablename = c.relname
+     );
+
+  foreach t in array tbls
   loop
     execute format('alter table public.%I enable row level security;', t);
     execute format(
