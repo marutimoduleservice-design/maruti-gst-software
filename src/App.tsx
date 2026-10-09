@@ -43,6 +43,7 @@ import ExpenseReport from "./pages/ExpenseReport";
 import NetProfitReport from "./pages/NetProfitReport";
 import SalaryReport from "./pages/SalaryReport";
 import ItemWiseQtyInOutReport from "./pages/ItemWiseQtyInOutReport";
+import GstReport from "./pages/GstReport";
 
 type MenuItem = {
   name: string;
@@ -76,6 +77,7 @@ const reportSubItems: MenuItem[] = [
   { name: "Purchase Report", icon: "📉" },
   { name: "Expense Report", icon: "💳" },
   { name: "Net Profit Report", icon: "💵" },
+  { name: "GST Report", icon: "🧾" },
   { name: "Worker Salary", icon: "👷" },
   { name: "Item Wise Qty In Out Report", icon: "🔄" },
 ];
@@ -846,6 +848,7 @@ function App() {
     if (activeMenu === "Purchase Report") return <PurchaseReport />;
     if (activeMenu === "Expense Report") return <ExpenseReport />;
     if (activeMenu === "Net Profit Report") return <NetProfitReport />;
+    if (activeMenu === "GST Report") return <GstReport />;
   if (activeMenu === "Worker Salary") return <SalaryReport />;
     if (activeMenu === "Item Wise Qty In Out Report") return <ItemWiseQtyInOutReport />;
 

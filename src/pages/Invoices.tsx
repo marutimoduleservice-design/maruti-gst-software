@@ -5,6 +5,15 @@ import { fmtDate } from "../lib/formatDate";
 import { SortTh, useSortedRows } from "../lib/tableSort";
 import HistoryPanel from "../components/HistoryPanel";
 import { enqueueOffline, isOffline } from "../lib/offlineQueue";
+import {
+  amountInWords,
+  GST_RATES,
+  round2,
+  roundOff,
+  stateCodeFromGstin,
+  stateName,
+  taxSplit,
+} from "../lib/gst";
 
 type Invoice = {
   id: number;
@@ -14,8 +23,16 @@ type Invoice = {
   job_card_id: number | null;
   invoice_type: string;
   total_amount: number;
-  customers: { customer_name: string; business_name?: string; mobile: string; address?: string };
+  customers: { customer_name: string; business_name?: string; mobile: string; address?: string; gst_number?: string };
   job_cards?: { id: number; job_no: string };
+  place_of_supply?: string | null;
+  supply_type?: string | null;
+  customer_gstin?: string | null;
+  taxable_amount?: number | null;
+  cgst_amount?: number | null;
+  sgst_amount?: number | null;
+  igst_amount?: number | null;
+  round_off?: number | null;
 };
 
 type ItemMaster = {
@@ -50,6 +67,8 @@ type Customer = {
   address?: string;
   business_address?: string;
   gst_number?: string;
+  state_code?: string;
+  state_name?: string;
 };
 
 type JobCard = {
@@ -112,6 +131,12 @@ const [invoicedQtyByJob, setInvoicedQtyByJob] = useState<Record<string, number>>
   const [selectedJob, setSelectedJob] = useState<JobCard | null>(null);
   const [lineItems, setLineItems] = useState<LineItem[]>([]);
 
+  // Company GST identity — isse intra-state (CGST+SGST) ya inter-state (IGST)
+  // decide hota hai. Non-GST company par tax add bilkul nahi hota.
+  const [companyStateCode, setCompanyStateCode] = useState("");
+  const [companyGstin, setCompanyGstin] = useState("");
+  const [gstEnabled, setGstEnabled] = useState(false);
+
   const invoiceCols = {
     invoice_no: (i: any) => String(i.invoice_no || ""),
     invoice_date: (i: any) => String(i.invoice_date || ""),
@@ -125,6 +150,25 @@ const [invoicedQtyByJob, setInvoicedQtyByJob] = useState<Record<string, number>>
 
   const loadData = async () => {
     setLoading(true);
+
+    try {
+      const { data: compRows } = await supabase
+        .from("companies")
+        .select("id, tax_mode, gst_number, state_code, state_name")
+        .eq("id", getCompanyId())
+        .limit(1);
+      const comp: any = (compRows || [])[0];
+      if (comp) {
+        const taxMode = String(comp.tax_mode || "").trim().toLowerCase();
+        const gstin = String(comp.gst_number || "");
+        const code = String(comp.state_code || "").trim() || stateCodeFromGstin(gstin) || "";
+        setCompanyGstin(gstin);
+        setCompanyStateCode(code);
+        setGstEnabled(taxMode !== "non-gst" && (Boolean(gstin) || Boolean(code)));
+      }
+    } catch {
+      // Ignore — GST info na mile to non-GST invoice hi banega.
+    }
 
     // Offline: Promise.all reject hoga — jo data pehle se screen par hai wahi
     // rehne do, warna loading spinner hamesha ke liye atak jayega.
@@ -326,6 +370,8 @@ if (repStats.pending > 0) {
           cost_rate: 0,
           max_stock: 999,
           editable: true,
+          hsn_code: "",
+          gst_percent: gstEnabled ? 18 : 0,
         });
       }
 
@@ -344,6 +390,8 @@ if (repStats.pending > 0) {
           cost_rate: 0,
           max_stock: 999,
           editable: false,
+          hsn_code: "",
+          gst_percent: gstEnabled ? 18 : 0,
         });
       }
 
@@ -362,6 +410,8 @@ if (repStats.pending > 0) {
           cost_rate: 0,
           max_stock: 999,
           editable: false,
+          hsn_code: "",
+          gst_percent: gstEnabled ? 18 : 0,
         });
       }
 
@@ -474,6 +524,8 @@ if (repStats.pending > 0) {
         cost_rate: 0,
         max_stock: 999,
         editable: true,
+        hsn_code: "",
+        gst_percent: gstEnabled ? 18 : 0,
       },
     ]);
   };
@@ -493,6 +545,8 @@ if (repStats.pending > 0) {
         cost_rate: 0,
         max_stock: 999,
         editable: true,
+        hsn_code: "",
+        gst_percent: 0,
       },
     ]);
   };
@@ -518,6 +572,8 @@ if (repStats.pending > 0) {
               updatedLine.cost_rate = 0;
               updatedLine.quantity = "";
               updatedLine.total = 0;
+              updatedLine.hsn_code = "";
+              updatedLine.gst_percent = 0;
             } else {
               const foundStock = purchaseStock.find((ps) =>
                 String(ps.id) === String(value) || getPurchaseOptionValue(ps) === String(value) || String(ps.inward_no) === String(value)
@@ -538,6 +594,9 @@ if (repStats.pending > 0) {
                 updatedLine.rate = customerRate ?? matchedMasterItem?.sale_price ?? foundStock.item_master?.sale_price ?? 0;
                 updatedLine.cost_rate = foundStock.purchase_rate || 0;
                 updatedLine.max_stock = availableQty;
+                const gstSource = matchedMasterItem || foundStock.item_master;
+                updatedLine.hsn_code = (gstSource as ItemMaster | undefined)?.hsn_code || "";
+                updatedLine.gst_percent = Number((gstSource as ItemMaster | undefined)?.gst_percent ?? (gstEnabled ? 18 : 0)) || 0;
 
                 if (availableQty <= 0) {
                   alert(`Inward ${foundStock.inward_no} mein is item ka stock available nahi hai.`);
@@ -598,9 +657,60 @@ if (repStats.pending > 0) {
     );
   };
 
-  const baseTotal = lineItems.reduce((sum, item) => sum + (Number(item.total) || 0), 0);
   const totalPurchaseCost = lineItems.reduce((sum, item) => sum + (Number(item.quantity || 0) * Number(item.cost_rate)), 0);
-  const grandTotal = baseTotal;
+
+  // Place of supply customer ke state se — same state = CGST+SGST, alag = IGST.
+  // Non-GST company par gstEnabled false rehta hai, isliye koi tax add nahi hota.
+  const selectedCustomer = customers.find((c) => String(c.id) === selectedCustomerId);
+  const customerGstin = String(selectedCustomer?.gst_number || "");
+  const customerStateCode =
+    String(selectedCustomer?.state_code || "").trim() || stateCodeFromGstin(customerGstin) || "";
+  const placeOfSupplyCode = customerStateCode || companyStateCode;
+  const interState = Boolean(
+    gstEnabled && companyStateCode && customerStateCode && companyStateCode !== customerStateCode,
+  );
+  const supplyType = interState ? "Inter-State" : "Intra-State";
+  const placeOfSupplyName =
+    String(selectedCustomer?.state_name || "").trim() ||
+    stateName(placeOfSupplyCode) ||
+    stateName(companyStateCode) ||
+    "";
+
+  // Rate GST-exclusive maana gaya hai — tax line ke upar add hota hai.
+  const computedLines = lineItems.map((line) => {
+    const taxable = round2((Number(line.quantity) || 0) * (Number(line.rate) || 0));
+    const split = gstEnabled
+      ? taxSplit(taxable, Number(line.gst_percent) || 0, interState)
+      : { taxable, cgst: 0, sgst: 0, igst: 0, total: taxable };
+    return { line, ...split };
+  });
+
+  const taxableTotal = round2(computedLines.reduce((s, l) => s + l.taxable, 0));
+  const cgstTotal = round2(computedLines.reduce((s, l) => s + l.cgst, 0));
+  const sgstTotal = round2(computedLines.reduce((s, l) => s + l.sgst, 0));
+  const igstTotal = round2(computedLines.reduce((s, l) => s + l.igst, 0));
+  const grossTotal = round2(taxableTotal + cgstTotal + sgstTotal + igstTotal);
+  const roundOffValue = gstEnabled ? roundOff(grossTotal) : 0;
+  const grandTotal = round2(grossTotal + roundOffValue);
+
+  // Print modal ke liye saved invoice ka GST summary.
+  const printGst = printingInvoice
+    ? {
+        taxable: Number(printingInvoice.taxable_amount || 0),
+        cgst: Number(printingInvoice.cgst_amount || 0),
+        sgst: Number(printingInvoice.sgst_amount || 0),
+        igst: Number(printingInvoice.igst_amount || 0),
+        roundOff: Number(printingInvoice.round_off || 0),
+        placeOfSupply: printingInvoice.place_of_supply || "",
+        supplyType: printingInvoice.supply_type || "",
+        customerGstin: printingInvoice.customer_gstin || "",
+        show:
+          Number(printingInvoice.taxable_amount || 0) > 0 ||
+          Number(printingInvoice.cgst_amount || 0) > 0 ||
+          Number(printingInvoice.sgst_amount || 0) > 0 ||
+          Number(printingInvoice.igst_amount || 0) > 0,
+      }
+    : null;
 
   const handleEditInvoice = async (inv: Invoice) => {
     try {
@@ -683,7 +793,9 @@ if (repStats.pending > 0) {
             saved_quantity: lineQty,
             max_stock: isJobLine ? 999 : Math.max(computedMax, lineQty),
             purchase_line_id: matchedStock?.id,
-            editable: !it.inward_no?.startsWith("JOB") || it.inward_no === "JOB-REP"
+            editable: !it.inward_no?.startsWith("JOB") || it.inward_no === "JOB-REP",
+            hsn_code: it.hsn_code || "",
+            gst_percent: Number(it.gst_percent ?? (gstEnabled ? 18 : 0)) || 0,
           };
         });
         setLineItems(loadedLines);
@@ -804,16 +916,33 @@ const handleDeleteInvoice = async (inv: Invoice) => {
       p_job_card_id: activeTab === "Job Card" ? Number(selectedJobCardId) : null,
       p_invoice_type: activeTab,
       p_total_amount: Number(grandTotal) || 0,
-      p_lines: lineItems.map((item) => ({
-        inward_no: item.inward_no || "",
-        item_id: item.item_id ? Number(item.item_id) : null,
-        item_name: item.item_name || "",
-        quantity: Number(item.quantity) || 1,
-        rate: Number(item.rate) || 0,
-        total: Number(item.total) || 0,
-        cost_rate: Number(item.cost_rate) || 0,
-        source: item.source || "Spare Part",
+      p_lines: computedLines.map(({ line, taxable, cgst, sgst, igst }) => ({
+        inward_no: line.inward_no || "",
+        item_id: line.item_id ? Number(line.item_id) : null,
+        item_name: line.item_name || "",
+        quantity: Number(line.quantity) || 1,
+        rate: Number(line.rate) || 0,
+        total: taxable,
+        cost_rate: Number(line.cost_rate) || 0,
+        source: line.source || "Spare Part",
+        hsn_code: line.hsn_code || "",
+        gst_percent: Number(line.gst_percent) || 0,
+        taxable_value: taxable,
+        cgst_amount: cgst,
+        sgst_amount: sgst,
+        igst_amount: igst,
       })),
+      p_tax: {
+        place_of_supply: placeOfSupplyName,
+        place_of_supply_code: placeOfSupplyCode || "",
+        supply_type: supplyType,
+        customer_gstin: customerGstin,
+        taxable_amount: taxableTotal,
+        cgst_amount: cgstTotal,
+        sgst_amount: sgstTotal,
+        igst_amount: igstTotal,
+        round_off: roundOffValue,
+      },
       p_company_id: getCompanyId(),
     };
 
@@ -924,18 +1053,22 @@ const handleDeleteInvoice = async (inv: Invoice) => {
               <h2 style={{ margin: 0, color: "#1e3a8a" }}>MARUTI MODULE SERVICE</h2>
               <p style={{ margin: "5px 0", fontSize: 13, color: "#555" }}>Electronic Jacquard Module Service & Repairing Specialist</p>
               <p style={{ margin: 0, fontSize: 12, color: "#777" }}>Surat, Gujarat</p>
+              {companyGstin && <p style={{ margin: "4px 0 0", fontSize: 12, color: "#334155" }}><strong>GSTIN:</strong> {companyGstin}</p>}
             </div>
 
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "20px", fontSize: 14 }}>
               <div>
                 <strong>Business:</strong> {printingInvoice.customers?.business_name || printingInvoice.customers?.customer_name}<br/>
                 <strong>Mobile:</strong> {printingInvoice.customers?.mobile}<br/>
+                {printGst?.customerGstin && <><strong>GSTIN:</strong> {printGst.customerGstin}<br/></>}
                 <strong>Address:</strong> {printingInvoice.customers?.address || "Surat"}
+                {printGst?.show && printGst.placeOfSupply && <><br/><strong>Place of Supply:</strong> {printGst.placeOfSupply}</>}
               </div>
               <div style={{ textAlign: "right" }}>
                 <strong>Invoice No:</strong> {printingInvoice.invoice_no}<br/>
                 <strong>Date:</strong> {fmtDate(printingInvoice.invoice_date)}<br/>
                 <strong>Job Ref:</strong> {printingInvoice.job_cards?.job_no || "Direct Sale"}
+                {printGst?.supplyType && <><br/><strong>Supply:</strong> {printGst.supplyType}</>}
               </div>
             </div>
 
@@ -943,6 +1076,7 @@ const handleDeleteInvoice = async (inv: Invoice) => {
               <thead>
                 <tr style={{ background: "#f1f5f9" }}>
                   <th style={{ border: "1px solid #cbd5e1", padding: 8, textAlign: "left" }}>Item / Description</th>
+                  {printGst?.show && <th style={{ border: "1px solid #cbd5e1", padding: 8, textAlign: "center", width: 80 }}>HSN/SAC</th>}
                   <th style={{ border: "1px solid #cbd5e1", padding: 8, textAlign: "center", width: 60 }}>Qty</th>
                   <th style={{ border: "1px solid #cbd5e1", padding: 8, textAlign: "right", width: 100 }}>Rate (₹)</th>
                   <th style={{ border: "1px solid #cbd5e1", padding: 8, textAlign: "right", width: 100 }}>Total (₹)</th>
@@ -952,6 +1086,7 @@ const handleDeleteInvoice = async (inv: Invoice) => {
                 {printingItems.map((pi, idx) => (
                   <tr key={idx}>
                     <td style={{ border: "1px solid #cbd5e1", padding: 8 }}>{pi.item_name}</td>
+                    {printGst?.show && <td style={{ border: "1px solid #cbd5e1", padding: 8, textAlign: "center" }}>{pi.hsn_code || "—"}</td>}
                     <td style={{ border: "1px solid #cbd5e1", padding: 8, textAlign: "center" }}>{pi.quantity}</td>
                     <td style={{ border: "1px solid #cbd5e1", padding: 8, textAlign: "right" }}>₹ {pi.rate}</td>
                     <td style={{ border: "1px solid #cbd5e1", padding: 8, textAlign: "right" }}>₹ {pi.total}</td>
@@ -960,8 +1095,27 @@ const handleDeleteInvoice = async (inv: Invoice) => {
               </tbody>
             </table>
 
-            <div style={{ textAlign: "right", fontSize: 16, marginBottom: "30px" }}>
-              <strong>Grand Total: ₹ {printingInvoice.total_amount}</strong>
+            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "30px" }}>
+              <div style={{ minWidth: 260, fontSize: 14 }}>
+                {printGst?.show && (
+                  <table style={{ width: "100%", marginBottom: 8 }}>
+                    <tbody>
+                      <tr><td style={{ padding: "2px 0", color: "#475569" }}>Taxable Value</td><td style={{ padding: "2px 0", textAlign: "right" }}>₹ {printGst.taxable.toFixed(2)}</td></tr>
+                      {printGst.igst > 0
+                        ? <tr><td style={{ padding: "2px 0", color: "#475569" }}>IGST</td><td style={{ padding: "2px 0", textAlign: "right" }}>₹ {printGst.igst.toFixed(2)}</td></tr>
+                        : <>
+                            <tr><td style={{ padding: "2px 0", color: "#475569" }}>CGST</td><td style={{ padding: "2px 0", textAlign: "right" }}>₹ {printGst.cgst.toFixed(2)}</td></tr>
+                            <tr><td style={{ padding: "2px 0", color: "#475569" }}>SGST</td><td style={{ padding: "2px 0", textAlign: "right" }}>₹ {printGst.sgst.toFixed(2)}</td></tr>
+                          </>}
+                      <tr><td style={{ padding: "2px 0", color: "#475569" }}>Round Off</td><td style={{ padding: "2px 0", textAlign: "right" }}>₹ {printGst.roundOff.toFixed(2)}</td></tr>
+                    </tbody>
+                  </table>
+                )}
+                <div style={{ textAlign: "right", fontSize: 16 }}>
+                  <strong>Grand Total: ₹ {printingInvoice.total_amount}</strong>
+                </div>
+                <div style={{ textAlign: "right", fontSize: 12, color: "#475569", marginTop: 4, fontStyle: "italic" }}>{amountInWords(Number(printingInvoice.total_amount))}</div>
+              </div>
             </div>
 
             <button onClick={() => window.print()} style={{ background: "#2563eb", color: "white", border: "none", padding: "10px 20px", borderRadius: 4, cursor: "pointer", fontWeight: "bold" }}>🖨️ Print Invoice</button>
@@ -1085,6 +1239,8 @@ const handleDeleteInvoice = async (inv: Invoice) => {
               <th style={{ padding: 10, borderBottom: "1px solid #ddd" }}>Item / Module / Spare Part Name</th>
               <th style={{ padding: 10, borderBottom: "1px solid #ddd", width: 90 }}>Qty</th>
               <th style={{ padding: 10, borderBottom: "1px solid #ddd", width: 120 }}>Rate (₹)</th>
+              {gstEnabled && <th style={{ padding: 10, borderBottom: "1px solid #ddd", width: 110 }}>HSN / SAC</th>}
+              {gstEnabled && <th style={{ padding: 10, borderBottom: "1px solid #ddd", width: 90 }}>GST %</th>}
               <th style={{ padding: 10, borderBottom: "1px solid #ddd", width: 120 }}>Total (₹)</th>
               <th style={{ padding: 10, borderBottom: "1px solid #ddd", width: 120 }}>Purchase Cost</th>
               <th style={{ padding: 10, borderBottom: "1px solid #ddd", width: 50 }}>Action</th>
@@ -1140,6 +1296,30 @@ const handleDeleteInvoice = async (inv: Invoice) => {
                 <td style={{ padding: 6 }}>
                   <input type="number" value={item.rate} onChange={(e) => updateLineItem(item.id, "rate", e.target.value)} readOnly={item.source === "Repairing" ? false : !item.editable} style={{ width: "100%", padding: 9, border: "1px solid #ccc", borderRadius: 4, background: item.source === "Repairing" ? "#fff" : item.editable ? "#fff" : "#f1f5f9" }} />
                 </td>
+                {gstEnabled && (
+                  <td style={{ padding: 6 }}>
+                    <input
+                      type="text"
+                      value={item.hsn_code || ""}
+                      onChange={(e) => updateLineItem(item.id, "hsn_code", e.target.value)}
+                      placeholder="HSN/SAC"
+                      readOnly={!item.editable}
+                      style={{ width: "100%", padding: 9, border: "1px solid #ccc", borderRadius: 4, background: item.editable ? "#fff" : "#f1f5f9" }}
+                    />
+                  </td>
+                )}
+                {gstEnabled && (
+                  <td style={{ padding: 6 }}>
+                    <select
+                      value={String(Number(item.gst_percent) || 0)}
+                      onChange={(e) => updateLineItem(item.id, "gst_percent", e.target.value)}
+                      disabled={!item.editable}
+                      style={{ width: "100%", padding: 9, border: "1px solid #ccc", borderRadius: 4, background: item.editable ? "#fff" : "#f1f5f9" }}
+                    >
+                      {GST_RATES.map((r) => <option key={r} value={r}>{r}%</option>)}
+                    </select>
+                  </td>
+                )}
                 <td style={{ padding: 6, fontWeight: "bold" }}>₹ {item.total.toFixed(2)}</td>
                 <td style={{ padding: 6, color: "#d97706", fontWeight: "bold" }}>₹ {(Number(item.cost_rate || 0) * Number(item.quantity || 0)).toFixed(2)}</td>
                 <td style={{ padding: 6, textAlign: "center" }}>
@@ -1163,10 +1343,48 @@ const handleDeleteInvoice = async (inv: Invoice) => {
           </button>
         )}
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "15px", marginTop: 25, background: "#f8fafc", padding: 15, borderRadius: 8, alignItems: "center" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: "15px", marginTop: 25, background: "#f8fafc", padding: 15, borderRadius: 8, alignItems: "start" }}>
           <div>
+            {gstEnabled && (
+              <table style={{ width: "100%", fontSize: 13, marginBottom: 8 }}>
+                <tbody>
+                  <tr>
+                    <td style={{ padding: "2px 0", color: "#475569" }}>Taxable Value</td>
+                    <td style={{ padding: "2px 0", textAlign: "right", fontWeight: "bold" }}>₹ {taxableTotal.toFixed(2)}</td>
+                  </tr>
+                  {!interState ? (
+                    <>
+                      <tr>
+                        <td style={{ padding: "2px 0", color: "#475569" }}>CGST</td>
+                        <td style={{ padding: "2px 0", textAlign: "right" }}>₹ {cgstTotal.toFixed(2)}</td>
+                      </tr>
+                      <tr>
+                        <td style={{ padding: "2px 0", color: "#475569" }}>SGST</td>
+                        <td style={{ padding: "2px 0", textAlign: "right" }}>₹ {sgstTotal.toFixed(2)}</td>
+                      </tr>
+                    </>
+                  ) : (
+                    <tr>
+                      <td style={{ padding: "2px 0", color: "#475569" }}>IGST</td>
+                      <td style={{ padding: "2px 0", textAlign: "right" }}>₹ {igstTotal.toFixed(2)}</td>
+                    </tr>
+                  )}
+                  <tr>
+                    <td style={{ padding: "2px 0", color: "#475569" }}>Round Off</td>
+                    <td style={{ padding: "2px 0", textAlign: "right" }}>₹ {roundOffValue.toFixed(2)}</td>
+                  </tr>
+                  <tr>
+                    <td style={{ padding: "6px 0 0", color: "#64748b", fontSize: 12 }} colSpan={2}>
+                      {supplyType}{placeOfSupplyName ? ` • Place of Supply: ${placeOfSupplyName}` : ""}
+                      {customerGstin ? ` • GSTIN: ${customerGstin}` : " • B2C"}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            )}
             <label style={{ fontSize: 11, fontWeight: "bold", display: "block", color: "#64748b" }}>Grand Total Bill (₹)</label>
             <strong style={{ color: "#166534", fontSize: 20 }}>₹ {grandTotal.toFixed(2)}</strong>
+            <div style={{ fontSize: 12, color: "#475569", marginTop: 4, fontStyle: "italic" }}>{amountInWords(grandTotal)}</div>
           </div>
           <div>
             <label style={{ fontSize: 11, fontWeight: "bold", display: "block", color: "#64748b" }}>Total Purchase Cost (₹)</label>

@@ -1,7 +1,14 @@
-import { sc } from "../lib/company";
+import { sc, getCompanyId } from "../lib/company";
 import { useEffect, useState, useMemo } from "react";
 import { fmtDate } from "../lib/formatDate";
 import { SortTh, useSortedRows } from "../lib/tableSort";
+import { supabase } from "../lib/supabase";
+import {
+  GST_RATES,
+  round2,
+  stateCodeFromGstin,
+  taxSplit,
+} from "../lib/gst";
 
 type PurchaseRecord = {
   id: number;
@@ -18,6 +25,14 @@ type PurchaseRecord = {
   total_amount: number;
   payment_mode?: string;
   remarks?: string;
+  vendor_gstin?: string | null;
+  hsn_code?: string | null;
+  gst_percent?: number | null;
+  taxable_value?: number | null;
+  cgst_amount?: number | null;
+  sgst_amount?: number | null;
+  igst_amount?: number | null;
+  supply_type?: string | null;
 };
 
 type ItemOption = {
@@ -27,6 +42,8 @@ type ItemOption = {
   purchase_price?: number | null;
   cost_price?: number | null;
   rate?: number | null;
+  hsn_code?: string | null;
+  gst_percent?: number | null;
 };
 
 type VendorOption = {
@@ -35,6 +52,9 @@ type VendorOption = {
   business_name: string | null;
   contact_person?: string | null;
   phone?: string | null;
+  gstin?: string | null;
+  state_code?: string | null;
+  state_name?: string | null;
 };
 
 type PurchaseItemRow = {
@@ -45,6 +65,8 @@ type PurchaseItemRow = {
   quantity: number;
   rate: number;
   total_amount: number;
+  hsn_code?: string;
+  gst_percent?: number;
 };
 
 function Purchase() {
@@ -81,6 +103,52 @@ function Purchase() {
   const [itemRows, setItemRows] = useState<PurchaseItemRow[]>([
     { inward_no: "", item_name: "", item_code: "", quantity: 1, rate: 0, total_amount: 0 },
   ]);
+
+  // Company GST identity — vendor ke state se intra/inter decide hota hai.
+  const [companyStateCode, setCompanyStateCode] = useState("");
+  const [gstEnabled, setGstEnabled] = useState(false);
+
+  // GST split is vendor ke state par depend karta hai (form vendor se link hai).
+  const selectedVendor = vendorsList.find((v) => String(v.id) === String(formData.vendor_id));
+  const vendorGstin = String(selectedVendor?.gstin || "").trim();
+  const vendorStateCode =
+    String(selectedVendor?.state_code || "").trim() || stateCodeFromGstin(vendorGstin) || "";
+  const interState = Boolean(
+    gstEnabled && companyStateCode && vendorStateCode && companyStateCode !== vendorStateCode,
+  );
+  const purchaseSupplyType = interState ? "Inter-State" : "Intra-State";
+
+  // Row ka GST split — rate (price) GST-exclusive maana gaya hai.
+  const rowTaxSplit = (row: PurchaseItemRow) =>
+    gstEnabled
+      ? taxSplit(
+          round2((Number(row.quantity) || 0) * (Number(row.rate) || 0)),
+          Number(row.gst_percent) || 0,
+          interState,
+        )
+      : {
+          taxable: round2((Number(row.quantity) || 0) * (Number(row.rate) || 0)),
+          cgst: 0,
+          sgst: 0,
+          igst: 0,
+          total: round2((Number(row.quantity) || 0) * (Number(row.rate) || 0)),
+        };
+
+  const purchaseTaxTotals = itemRows.reduce(
+    (acc, row) => {
+      const s = rowTaxSplit(row);
+      return {
+        taxable: acc.taxable + s.taxable,
+        cgst: acc.cgst + s.cgst,
+        sgst: acc.sgst + s.sgst,
+        igst: acc.igst + s.igst,
+      };
+    },
+    { taxable: 0, cgst: 0, sgst: 0, igst: 0 },
+  );
+  const purchaseGrandTotal = round2(
+    purchaseTaxTotals.taxable + purchaseTaxTotals.cgst + purchaseTaxTotals.sgst + purchaseTaxTotals.igst,
+  );
 
   // ROBUST LIVE BANK BALANCE CALCULATION
   const calculateLiveBalance = async () => {
@@ -143,6 +211,24 @@ function Purchase() {
 
     try {
       await calculateLiveBalance();
+
+      try {
+        const { data: compRows } = await supabase
+          .from("companies")
+          .select("id, tax_mode, gst_number, state_code")
+          .eq("id", getCompanyId())
+          .limit(1);
+        const comp: any = (compRows || [])[0];
+        if (comp) {
+          const taxMode = String(comp.tax_mode || "").trim().toLowerCase();
+          const gstin = String(comp.gst_number || "");
+          const code = String(comp.state_code || "").trim() || stateCodeFromGstin(gstin) || "";
+          setCompanyStateCode(code);
+          setGstEnabled(taxMode !== "non-gst" && (Boolean(gstin) || Boolean(code)));
+        }
+      } catch {
+        // ignore
+      }
 
       // 1. Fetch Items
       let { data: itemsData } = await sc("items")
@@ -215,7 +301,7 @@ function Purchase() {
   const handleAddItemRow = () => {
     setItemRows((prev) => [
       ...prev,
-      { inward_no: nextInwardNo(prev), item_name: "", item_code: "", quantity: 1, rate: 0, total_amount: 0 },
+      { inward_no: nextInwardNo(prev), item_name: "", item_code: "", quantity: 1, rate: 0, total_amount: 0, hsn_code: "", gst_percent: 0 },
     ]);
   };
 
@@ -260,12 +346,21 @@ function Purchase() {
           current.rate ??
           0
       );
+      const gstPercent = Number(matchedItem.gst_percent ?? (gstEnabled ? 18 : 0)) || 0;
+      const rowForTax: PurchaseItemRow = {
+        ...current,
+        quantity: current.quantity,
+        rate: itemRate,
+        gst_percent: gstPercent,
+      };
       updated[index] = {
         ...current,
         item_name: matchedItem.item_name || "",
         item_code: matchedItem.item_code || "",
         rate: itemRate,
-        total_amount: current.quantity * itemRate,
+        hsn_code: matchedItem.hsn_code || "",
+        gst_percent: gstPercent,
+        total_amount: rowTaxSplit(rowForTax).total,
       };
     } else {
       updated[index] = {
@@ -278,12 +373,19 @@ function Purchase() {
 
   const handleRowQtyRateChange = (index: number, qty: number, rate: number) => {
     const updated = [...itemRows];
-    updated[index] = {
+    const row: PurchaseItemRow = { ...updated[index], quantity: qty, rate: rate };
+    updated[index] = { ...row, total_amount: rowTaxSplit(row).total };
+    setItemRows(updated);
+  };
+
+  const handleRowGstChange = (index: number, gstPercent: number, hsn: string) => {
+    const updated = [...itemRows];
+    const row: PurchaseItemRow = {
       ...updated[index],
-      quantity: qty,
-      rate: rate,
-      total_amount: qty * rate,
+      gst_percent: gstPercent,
+      hsn_code: hsn,
     };
+    updated[index] = { ...row, total_amount: rowTaxSplit(row).total };
     setItemRows(updated);
   };
 
@@ -306,13 +408,18 @@ function Purchase() {
     });
     if (inwNumbers.length > 0) nextInw = Math.max(...inwNumbers) + 1;
 
-    const firstRow = {
+    const firstItem = itemsList[0];
+    const firstRate = Number(firstItem?.purchase_price ?? firstItem?.cost_price ?? 0);
+    const firstGst = Number(firstItem?.gst_percent ?? (gstEnabled ? 18 : 0)) || 0;
+    const firstRow: PurchaseItemRow = {
       inward_no: `INW-${nextInw}`,
-      item_name: itemsList[0]?.item_name || "",
-      item_code: itemsList[0]?.item_code || "",
+      item_name: firstItem?.item_name || "",
+      item_code: firstItem?.item_code || "",
       quantity: 1,
-      rate: Number(itemsList[0]?.purchase_price ?? itemsList[0]?.cost_price ?? 0),
-      total_amount: Number(itemsList[0]?.purchase_price ?? itemsList[0]?.cost_price ?? 0),
+      rate: firstRate,
+      hsn_code: firstItem?.hsn_code || "",
+      gst_percent: firstGst,
+      total_amount: rowTaxSplit({ quantity: 1, rate: firstRate, gst_percent: firstGst } as PurchaseItemRow).total,
     };
 
     setFormData({
@@ -366,6 +473,8 @@ function Purchase() {
         item_code: r.item_code || "",
         quantity: r.quantity || 1,
         rate: r.rate || 0,
+        hsn_code: r.hsn_code || "",
+        gst_percent: Number(r.gst_percent || 0),
         total_amount: r.total_amount || (r.quantity || 1) * (r.rate || 0),
       }))
     );
@@ -388,6 +497,7 @@ function Purchase() {
         const newRows = itemRows.filter((r) => r.id === undefined);
 
         for (const row of existingRows) {
+          const tax = rowTaxSplit(row);
           const recordToUpdate = {
             inward_no: row.inward_no || generatedPo,
             purchase_no: generatedPo,
@@ -402,6 +512,14 @@ function Purchase() {
             total_amount: Number(row.total_amount || 0),
             payment_mode: formData.payment_mode,
             remarks: formData.remarks,
+            vendor_gstin: vendorGstin || null,
+            supply_type: purchaseSupplyType,
+            hsn_code: row.hsn_code || "",
+            gst_percent: Number(row.gst_percent || 0),
+            taxable_value: tax.taxable,
+            cgst_amount: tax.cgst,
+            sgst_amount: tax.sgst,
+            igst_amount: tax.igst,
           };
 
           const { error } = await sc("purchases")
@@ -411,21 +529,32 @@ function Purchase() {
         }
 
         if (newRows.length > 0) {
-          const recordsToInsert = newRows.map((row) => ({
-            inward_no: row.inward_no || generatedPo,
-            purchase_no: generatedPo,
-            purchase_date: formData.purchase_date,
-            vendor_id: formData.vendor_id ? Number(formData.vendor_id) : null,
-            vendor_name: formData.vendor_name || "Direct Vendor",
-            vendor_code: formData.vendor_code || "",
-            item_name: row.item_name || "Module Part",
-            item_code: row.item_code || "",
-            quantity: Number(row.quantity || 1),
-            rate: Number(row.rate || 0),
-            total_amount: Number(row.total_amount || 0),
-            payment_mode: formData.payment_mode,
-            remarks: formData.remarks,
-          }));
+          const recordsToInsert = newRows.map((row) => {
+            const tax = rowTaxSplit(row);
+            return {
+              inward_no: row.inward_no || generatedPo,
+              purchase_no: generatedPo,
+              purchase_date: formData.purchase_date,
+              vendor_id: formData.vendor_id ? Number(formData.vendor_id) : null,
+              vendor_name: formData.vendor_name || "Direct Vendor",
+              vendor_code: formData.vendor_code || "",
+              item_name: row.item_name || "Module Part",
+              item_code: row.item_code || "",
+              quantity: Number(row.quantity || 1),
+              rate: Number(row.rate || 0),
+              total_amount: Number(row.total_amount || 0),
+              payment_mode: formData.payment_mode,
+              remarks: formData.remarks,
+              vendor_gstin: vendorGstin || null,
+              supply_type: purchaseSupplyType,
+              hsn_code: row.hsn_code || "",
+              gst_percent: Number(row.gst_percent || 0),
+              taxable_value: tax.taxable,
+              cgst_amount: tax.cgst,
+              sgst_amount: tax.sgst,
+              igst_amount: tax.igst,
+            };
+          });
 
           const { error } = await sc("purchases").insert(recordsToInsert);
           if (error) throw error;
@@ -448,21 +577,32 @@ function Purchase() {
           }
         }
       } else {
-        const recordsToInsert = itemRows.map((row) => ({
-          inward_no: row.inward_no || generatedPo,
-          purchase_no: generatedPo,
-          purchase_date: formData.purchase_date,
-          vendor_id: formData.vendor_id ? Number(formData.vendor_id) : null,
-          vendor_name: formData.vendor_name || "Direct Vendor",
-          vendor_code: formData.vendor_code || "",
-          item_name: row.item_name || "Module Part",
-          item_code: row.item_code || "",
-          quantity: Number(row.quantity || 1),
-          rate: Number(row.rate || 0),
-          total_amount: Number(row.total_amount || 0),
-          payment_mode: formData.payment_mode,
-          remarks: formData.remarks,
-        }));
+        const recordsToInsert = itemRows.map((row) => {
+          const tax = rowTaxSplit(row);
+          return {
+            inward_no: row.inward_no || generatedPo,
+            purchase_no: generatedPo,
+            purchase_date: formData.purchase_date,
+            vendor_id: formData.vendor_id ? Number(formData.vendor_id) : null,
+            vendor_name: formData.vendor_name || "Direct Vendor",
+            vendor_code: formData.vendor_code || "",
+            item_name: row.item_name || "Module Part",
+            item_code: row.item_code || "",
+            quantity: Number(row.quantity || 1),
+            rate: Number(row.rate || 0),
+            total_amount: Number(row.total_amount || 0),
+            payment_mode: formData.payment_mode,
+            remarks: formData.remarks,
+            vendor_gstin: vendorGstin || null,
+            supply_type: purchaseSupplyType,
+            hsn_code: row.hsn_code || "",
+            gst_percent: Number(row.gst_percent || 0),
+            taxable_value: tax.taxable,
+            cgst_amount: tax.cgst,
+            sgst_amount: tax.sgst,
+            igst_amount: tax.igst,
+          };
+        });
 
         const { error } = await sc("purchases").insert(recordsToInsert);
         if (error) throw error;
@@ -913,6 +1053,14 @@ function Purchase() {
                     </option>
                   ))}
                 </select>
+                {gstEnabled && selectedVendor && (
+                  <div style={{ marginTop: 6, fontSize: 12, color: "#475569" }}>
+                    GSTIN: <strong>{vendorGstin || "—"}</strong> &nbsp;•&nbsp; Supply:{" "}
+                    <strong style={{ color: interState ? "#b45309" : "#15803d" }}>
+                      {purchaseSupplyType}
+                    </strong>
+                  </div>
+                )}
               </div>
 
               {/* MULTI-ITEM ROWS TABLE */}
@@ -940,13 +1088,15 @@ function Purchase() {
                 </div>
 
                 <div style={{ border: "1px solid #cbd5e1", borderRadius: 8, overflowX: "auto" }}>
-                  <table style={{ width: "100%", minWidth: 620, borderCollapse: "collapse", fontSize: 12 }}>
+                  <table style={{ width: "100%", minWidth: gstEnabled ? 860 : 620, borderCollapse: "collapse", fontSize: 12 }}>
                     <thead>
                       <tr style={{ background: "#f8fafc", borderBottom: "1px solid #cbd5e1" }}>
                         <th style={{ padding: 8, textAlign: "left" }}>Item Name *</th>
                         <th style={{ padding: 8, textAlign: "left", width: 110 }}>Inward No</th>
                         <th style={{ padding: 8, textAlign: "right", width: 80 }}>Qty *</th>
                         <th style={{ padding: 8, textAlign: "right", width: 100 }}>Rate (₹) *</th>
+                        {gstEnabled && <th style={{ padding: 8, textAlign: "left", width: 100 }}>HSN/SAC</th>}
+                        {gstEnabled && <th style={{ padding: 8, textAlign: "right", width: 80 }}>GST %</th>}
                         <th style={{ padding: 8, textAlign: "right", width: 110 }}>Total (₹)</th>
                         <th style={{ padding: 8, textAlign: "center", width: 50 }}>Action</th>
                       </tr>
@@ -1015,6 +1165,30 @@ function Purchase() {
                               style={{ width: "100%", padding: 6, borderRadius: 6, border: "1px solid #cbd5e1", textAlign: "right" }}
                             />
                           </td>
+                          {gstEnabled && (
+                            <td style={{ padding: 8 }}>
+                              <input
+                                type="text"
+                                value={row.hsn_code || ""}
+                                onChange={(e) => handleRowGstChange(index, Number(row.gst_percent || 0), e.target.value)}
+                                placeholder="HSN/SAC"
+                                style={{ width: "100%", padding: 6, borderRadius: 6, border: "1px solid #cbd5e1" }}
+                              />
+                            </td>
+                          )}
+                          {gstEnabled && (
+                            <td style={{ padding: 8 }}>
+                              <select
+                                value={String(Number(row.gst_percent) || 0)}
+                                onChange={(e) => handleRowGstChange(index, Number(e.target.value), row.hsn_code || "")}
+                                style={{ width: "100%", padding: 6, borderRadius: 6, border: "1px solid #cbd5e1", background: "#fff", textAlign: "right" }}
+                              >
+                                {GST_RATES.map((r) => (
+                                  <option key={r} value={r}>{r}%</option>
+                                ))}
+                              </select>
+                            </td>
+                          )}
                           <td style={{ padding: 8, textAlign: "right", fontWeight: 800 }}>
                             ₹ {row.total_amount.toFixed(2)}
                           </td>
@@ -1034,6 +1208,36 @@ function Purchase() {
                   </table>
                 </div>
               </div>
+
+              {gstEnabled && (
+                <div style={{ background: "#f8fafc", borderRadius: 8, padding: 12, marginBottom: 18, fontSize: 13 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}>
+                    <span style={{ color: "#475569" }}>Taxable Value</span>
+                    <span>₹ {purchaseTaxTotals.taxable.toFixed(2)}</span>
+                  </div>
+                  {!interState ? (
+                    <>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}>
+                        <span style={{ color: "#475569" }}>CGST (Input)</span>
+                        <span>₹ {purchaseTaxTotals.cgst.toFixed(2)}</span>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}>
+                        <span style={{ color: "#475569" }}>SGST (Input)</span>
+                        <span>₹ {purchaseTaxTotals.sgst.toFixed(2)}</span>
+                      </div>
+                    </>
+                  ) : (
+                    <div style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}>
+                      <span style={{ color: "#475569" }}>IGST (Input)</span>
+                      <span>₹ {purchaseTaxTotals.igst.toFixed(2)}</span>
+                    </div>
+                  )}
+                  <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 800, borderTop: "1px solid #e2e8f0", marginTop: 6, paddingTop: 6 }}>
+                    <span>Grand Total (incl. GST)</span>
+                    <span>₹ {purchaseGrandTotal.toFixed(2)}</span>
+                  </div>
+                </div>
+              )}
 
               <div style={{ marginBottom: 18 }}>
                 <label style={labelStyle}>Payment Mode</label>

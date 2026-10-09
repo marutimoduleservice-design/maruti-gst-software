@@ -9,6 +9,8 @@ export type Customer = {
   business_address: string | null;
   gst_available: boolean;
   gst_number: string | null;
+  state_code?: string | null;
+  state_name?: string | null;
   payment_term: string;
 };
 
@@ -87,6 +89,7 @@ function CustomerDetails({ customer, onClose }: CustomerDetailsProps) {
                 <div><dt>Business</dt><dd>{customer.business_name || "Not added"}</dd></div>
                 <div><dt>GST Status</dt><dd>{customer.gst_available ? "GST Registered" : "Non-GST"}</dd></div>
                 <div><dt>GST Number</dt><dd>{customer.gst_number || "Not applicable"}</dd></div>
+                <div><dt>State</dt><dd>{customer.state_name || "Not added"}</dd></div>
                 <div><dt>Address</dt><dd>{customer.business_address || "Not added"}</dd></div>
               </dl>
             </section>

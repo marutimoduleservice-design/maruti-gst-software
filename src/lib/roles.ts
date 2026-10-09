@@ -62,6 +62,7 @@ const ALL_MENUS: string[] = [
   "Purchase Report",
   "Expense Report",
   "Net Profit Report",
+  "GST Report",
   "Worker Salary",
   "Item Wise Qty In Out Report",
   "Settings",
@@ -90,6 +91,7 @@ const ACCESS: Record<StaffRole, string[]> = {
     "Purchase Report",
     "Expense Report",
     "Net Profit Report",
+    "GST Report",
   ],
 
   // Store person: sirf Purchase + Stock (Item Master, labels, vendor).
@@ -115,6 +117,7 @@ const ACCESS: Record<StaffRole, string[]> = {
     "Purchase Report",
     "Expense Report",
     "Net Profit Report",
+    "GST Report",
     "Item Wise Qty In Out Report",
     "Activity Log",
   ],

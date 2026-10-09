@@ -422,9 +422,25 @@ function PrintCenter() {
   const printBodyForInvoice = async (inv: any) => {
     const customer = customers.find((cc) => String(cc.id) === String(inv.customer_id));
     const items = invoiceItems.filter((it) => String(it.invoice_id) === String(inv.id));
-    const total = items.length
+    const itemsTotal = items.length
       ? items.reduce((s, it) => s + (Number(it.total) || Number(it.quantity || 0) * Number(it.rate || 0)), 0)
       : Number(inv.total_amount) || 0;
+    const total = Number(inv.total_amount) || itemsTotal;
+
+    // GST: header values saved invoice par, warna lines se fallback.
+    const itemTaxable = items.reduce((s, it: any) => s + (Number(it.taxable_value) || Number(it.total) || 0), 0);
+    const itemCgst = items.reduce((s, it: any) => s + (Number(it.cgst_amount) || 0), 0);
+    const itemSgst = items.reduce((s, it: any) => s + (Number(it.sgst_amount) || 0), 0);
+    const itemIgst = items.reduce((s, it: any) => s + (Number(it.igst_amount) || 0), 0);
+    const headerTax = Number(inv.cgst_amount || 0) + Number(inv.sgst_amount || 0) + Number(inv.igst_amount || 0);
+    const gstMode = headerTax > 0 || itemCgst + itemSgst + itemIgst > 0 || (Boolean(COMPANY.gstin) && itemTaxable > 0);
+    const tTaxable = Number(inv.taxable_amount || 0) || itemTaxable;
+    const cgst = Number(inv.cgst_amount || 0) || itemCgst;
+    const sgst = Number(inv.sgst_amount || 0) || itemSgst;
+    const igst = Number(inv.igst_amount || 0) || itemIgst;
+    const roundOff = Number(inv.round_off || 0);
+    const customerGstin = inv.customer_gstin || customer?.gst_number || "";
+    const placeOfSupply = inv.place_of_supply || customer?.state_name || "";
     let qrDataUrl = "";
     if (COMPANY.upi_id) {
       const upiLink = `upi://pay?pa=${encodeURIComponent(COMPANY.upi_id)}&pn=${encodeURIComponent(COMPANY.bank_account_holder || COMPANY.name)}&am=${total.toFixed(2)}&cu=INR`;
@@ -438,17 +454,32 @@ function PrintCenter() {
       ? items.map((it: any, i: number) => `<tr>
           <td class="c">${i + 1}</td>
           <td>${esc(it.item_name || "-")}</td>
+          ${gstMode ? `<td class="c">${esc(it.hsn_code || "—")}</td>` : ""}
           <td class="c">${Number(it.quantity || 0)}</td>
           <td class="r">${money(Number(it.rate || 0))}</td>
-          <td class="r">${money(Number(it.total) || Number(it.quantity || 0) * Number(it.rate || 0))}</td>
+          <td class="r">${money(Number(it.taxable_value) || Number(it.total) || Number(it.quantity || 0) * Number(it.rate || 0))}</td>
         </tr>`).join("")
       : `<tr>
           <td class="c">1</td>
           <td>Module Service & Spare Parts</td>
+          ${gstMode ? `<td class="c">—</td>` : ""}
           <td class="c">1</td>
           <td class="r">${money(total)}</td>
           <td class="r">${money(total)}</td>
         </tr>`;
+    const gstTaxSummary = gstMode
+      ? `<table style="width:100%;margin:2px 0 6px">
+          <tbody>
+            <tr><td style="text-align:right">Taxable Value</td><td class="r" style="width:130px">${money(tTaxable)}</td></tr>
+            ${igst > 0
+              ? `<tr><td style="text-align:right">IGST</td><td class="r">${money(igst)}</td></tr>`
+              : `<tr><td style="text-align:right">CGST</td><td class="r">${money(cgst)}</td></tr>
+                 <tr><td style="text-align:right">SGST</td><td class="r">${money(sgst)}</td></tr>`}
+            ${roundOff !== 0 ? `<tr><td style="text-align:right">Round Off</td><td class="r">${money(roundOff)}</td></tr>` : ""}
+            <tr class="tot-row"><td style="text-align:right">Grand Total</td><td class="r">${money(total)}</td></tr>
+          </tbody>
+        </table>`
+      : "";
     const invReceipts = receipts.filter((rc) =>
       (rc.customerRefs || []).some((r: any) => String(r.id) === String(inv.id))
     );
@@ -463,7 +494,7 @@ function PrintCenter() {
   <li>3-month standard module service warranty (labor only). Any replacement parts will incur material charges. Condition: Warranty applies only if a new upper cord is installed.</li>
   <li>Premium Service Includes 1 Year Warranty. All Upper Cords And Iron Hooks Are Replaced With New Parts During Service.</li>
   <li>Warranty Does Not Cover Physical Damage, Water Damage, Power Surges, Mishandling.</li>
-  <li>This is a non-GST invoice. Goods once sold will not take back. MSME/Udyam Registration No. ${esc(COMPANY.udyam_number)}</li>
+  <li>${COMPANY.gstin ? "This is a GST invoice." : "This is a non-GST invoice."} Goods once sold will not take back. MSME/Udyam Registration No. ${esc(COMPANY.udyam_number)}</li>
 </ol>`;
     return `
   <div class="doc-title">INVOICE</div>
@@ -482,13 +513,16 @@ function PrintCenter() {
       <div class="info-row"><span>Payment Status</span><b style="color:${invStatus === "Paid" ? "#15803d" : "#dc2626"}">${esc(invStatus)}</b></div>
       <div class="info-row"><span>Due Date</span><b>${/10\s*(th|st)?\s*(of)?\s*(every\s+)?next\s*month/i.test(payTerm) ? "Date 10th Of Next Month" : esc(fmtDate(dueDate))}</b></div>
       <div class="info-row"><span>Total Amount</span><b>${money(total)}</b></div>
+      ${gstMode && customerGstin ? `<div class="info-row"><span>Customer GSTIN</span><b>${esc(customerGstin)}</b></div>` : ""}
+      ${gstMode ? `<div class="info-row"><span>Place of Supply</span><b>${esc(placeOfSupply || "—")}</b></div>` : ""}
     </div>
   </div>
   <table class="inv-items">
-    <thead><tr><th class="c" style="width:44px">#</th><th>Item Description</th><th class="c" style="width:60px">Qty</th><th class="r" style="width:100px">Rate (₹)</th><th class="r" style="width:110px">Amount (₹)</th></tr></thead>
+    <thead><tr><th class="c" style="width:44px">#</th><th>Item Description</th>${gstMode ? `<th class="c" style="width:80px">HSN/SAC</th>` : ""}<th class="c" style="width:60px">Qty</th><th class="r" style="width:100px">Rate (₹)</th><th class="r" style="width:110px">Amount (₹)</th></tr></thead>
     <tbody>${itemRows}</tbody>
-    <tr class="tot-row"><td colspan="4" style="text-align:right">Grand Total</td><td class="r">${money(total)}</td></tr>
+    ${gstMode ? "" : `<tr class="tot-row"><td colspan="4" style="text-align:right">Grand Total</td><td class="r">${money(total)}</td></tr>`}
   </table>
+  ${gstTaxSummary}
   <div class="amount-words"><b>Amount In Words:</b> ${numToWords(Math.round(total))} Rupees Only</div>
   <table class="pay-table">
     <tr class="tot-row"><td class="r" style="text-align:left;background:#f8fafc" colspan="5"><b>Payment Details — For ${esc(COMPANY.bank_account_holder || COMPANY.name)}</b></td></tr>

@@ -2,6 +2,18 @@ import { sc } from "../lib/company";
 import { useEffect, useMemo, useState } from "react";
 import { SortTh, useSortedRows } from "../lib/tableSort";
 import CustomerDetails, { type Customer } from "./CustomerDetails";
+import {
+  GST_STATE_CODES,
+  isValidGstin,
+  stateCodeFromGstin,
+  stateCodeFromName,
+  stateName,
+} from "../lib/gst";
+
+const STATE_OPTIONS = Object.entries(GST_STATE_CODES)
+  .map(([code, name]) => ({ code, name }))
+  .filter((s, i, arr) => arr.findIndex((x) => x.name === s.name) === i)
+  .sort((a, b) => a.name.localeCompare(b.name));
 
 const paymentTerms = [
   "Cash",
@@ -78,6 +90,7 @@ function Customers() {
   const [businessAddress, setBusinessAddress] = useState("");
   const [gstAvailable, setGstAvailable] = useState(false);
   const [gstNumber, setGstNumber] = useState("");
+  const [stateCode, setStateCode] = useState("");
   const [paymentTerm, setPaymentTerm] = useState("Cash");
 
   // --------------------------------------------------
@@ -97,6 +110,8 @@ function Customers() {
         business_address,
         gst_available,
         gst_number,
+        state_code,
+        state_name,
         payment_term
       `)
       .order("business_name", { ascending: true });
@@ -126,6 +141,7 @@ function Customers() {
     setBusinessAddress("");
     setGstAvailable(false);
     setGstNumber("");
+    setStateCode("");
     setPaymentTerm("Cash");
     setEditingCustomer(null);
   };
@@ -152,6 +168,9 @@ function Customers() {
     setBusinessAddress(customer.business_address || "");
     setGstAvailable(customer.gst_available);
     setGstNumber(customer.gst_number || "");
+    setStateCode(
+      customer.state_code || stateCodeFromGstin(customer.gst_number) || ""
+    );
     setPaymentTerm(customer.payment_term || "Cash");
 
     setShowForm(true);
@@ -198,9 +217,15 @@ function Customers() {
       return;
     }
 
-    if (gstAvailable && !gstNumber.trim()) {
-      alert("GST Number enter karein.");
-      return;
+    if (gstAvailable) {
+      if (!gstNumber.trim()) {
+        alert("GST Number enter karein.");
+        return;
+      }
+      if (!isValidGstin(gstNumber)) {
+        alert("GST Number invalid hai. 15-digit sahi GSTIN dalein (example: 24ABCDE1234F1Z5).");
+        return;
+      }
     }
 
     // --- DUPLICATE MOBILE CHECK ---
@@ -229,6 +254,8 @@ function Customers() {
         gst_number: gstAvailable
           ? gstNumber.trim().toUpperCase()
           : null,
+        state_code: stateCode || null,
+        state_name: stateName(stateCode) || null,
         payment_term: paymentTerm,
       };
 
@@ -354,8 +381,22 @@ function Customers() {
             } else if (header.includes("gst") && !header.includes("number")) {
               cust.gst_available =
                 val.toLowerCase() === "true" || val === "1" || val.toLowerCase() === "yes";
+            } else if (header.includes("state")) {
+              const code = /^[0-9]{1,2}$/.test(val)
+                ? val.padStart(2, "0")
+                : stateCodeFromName(val);
+              if (code && GST_STATE_CODES[code]) cust.state_code = code;
             }
           });
+
+          if (cust.gst_number) {
+            const code = stateCodeFromGstin(cust.gst_number);
+            if (code) cust.state_code = code;
+          }
+
+          if (cust.state_code) {
+            cust.state_name = stateName(cust.state_code);
+          }
 
           if (isBlankValue(cust.customer_name)) {
             const fallback = isBlankValue(cust.business_name)
@@ -1183,11 +1224,12 @@ function Customers() {
                   <input
                     type="text"
                     value={gstNumber}
-                    onChange={(event) =>
-                      setGstNumber(
-                        event.target.value.toUpperCase()
-                      )
-                    }
+                    onChange={(event) => {
+                      const value = event.target.value.toUpperCase();
+                      setGstNumber(value);
+                      const code = stateCodeFromGstin(value);
+                      if (code) setStateCode(code);
+                    }}
                     placeholder={
                       gstAvailable
                         ? "Enter GST number"
@@ -1196,6 +1238,30 @@ function Customers() {
                     disabled={!gstAvailable}
                     maxLength={15}
                   />
+
+                </div>
+
+                {/* STATE (Place of Supply) */}
+
+                <div className="customer-form-group">
+
+                  <label>
+                    State (Place of Supply)
+                  </label>
+
+                  <select
+                    value={stateCode}
+                    onChange={(event) =>
+                      setStateCode(event.target.value)
+                    }
+                  >
+                    <option value="">-- Select State --</option>
+                    {STATE_OPTIONS.map((s) => (
+                      <option key={s.code} value={s.code}>
+                        {s.code} — {s.name}
+                      </option>
+                    ))}
+                  </select>
 
                 </div>
 
