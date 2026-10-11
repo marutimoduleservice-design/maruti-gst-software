@@ -138,6 +138,7 @@ function PaymentsLedger() {
   // Chhoti report: sabhi bounced/returned payments ek jagah
   const [showBounceList, setShowBounceList] = useState(false);
   const [billAllocations, setBillAllocations] = useState<Record<number, number>>({});
+  const [billDeductions, setBillDeductions] = useState<Record<number, number>>({});
   // Har payment kis account se hua — Cash Box, HDFC, UPI etc.
   const [accounts, setAccounts] = useState<BankAccount[]>([]);
 
@@ -485,9 +486,14 @@ function PaymentsLedger() {
   };
 
   const toggleBill = (id: number) => {
-    setEntrySelectedIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-    );
+    setEntrySelectedIds((prev) => {
+      const next = prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
+      if (!next.includes(id)) {
+        setBillAllocations((p) => { const c = { ...p }; delete c[id]; return c; });
+        setBillDeductions((p) => { const c = { ...p }; delete c[id]; return c; });
+      }
+      return next;
+    });
   };
 
   const toggleAllBills = () => {
@@ -500,18 +506,15 @@ function PaymentsLedger() {
 
   useEffect(() => {
     const allocSum = entrySelectedIds.reduce((s, id) => s + (Number(billAllocations[id] || 0) || 0), 0);
-    if (allocSum > 0 && allocSum <= selectedTotal) {
-      setEntryForm((prev) => ({ ...prev, amount: allocSum }));
+    const dedSum = entrySelectedIds.reduce((s, id) => s + (Number(billDeductions[id] || 0) || 0), 0);
+    if (allocSum >= 0 || dedSum >= 0) {
+      setEntryForm((prev) => ({ ...prev, amount: allocSum, deduction: dedSum }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [billAllocations, activeTab]);
+  }, [billAllocations, billDeductions, activeTab, entrySelectedIds]);
 
-  const handleDiscountChange = (disc: number) => {
-    setEntryForm({
-      ...entryForm,
-      deduction: disc,
-      amount: Math.max(0, selectedTotal - disc),
-    });
+  const handleDiscountChange = (_disc: number) => {
+    // global discount disabled when using per-bill; keep form in sync if needed
   };
 
   // Recompute a vendor's purchase statuses (Paid / Partial / Pending) from all
@@ -847,8 +850,12 @@ function PaymentsLedger() {
           return;
         }
       } else if (amount < selectedTotal - 0.005) {
-        alert(`❌ आंशिक भुगतान के लिए कृपया "Pay Now" में हर bill का अलग amount दर्ज करें। (सिर्फ एक bill select करने पर total amount ही काफी है)`);
-        return;
+        const totalCovered = amount + deduction;
+        if (totalCovered < selectedTotal - 0.005) {
+          alert(`❌ आंशिक भुगतान के लिए कृपया "Pay Now" में हर bill का अलग amount दर्ज करें। (सिर्फ एक bill select करने पर total amount ही काफी है)`);
+          return;
+        }
+        // Write-off/deduction se baki cover ho raha hai → allow
       }
     }
     if (activeTab === "Vendors" && !editingVoucher && amount > availableBalance) {
@@ -987,6 +994,7 @@ function PaymentsLedger() {
       alert("📴 Offline — entry queue me save ho gayi hai. Internet aate hi app apne aap save kar dega (niche 'pending sync' banner dikhega).");
       setEntrySelectedIds([]);
       setBillAllocations({});
+      setBillDeductions({});
       return;
     }
 
@@ -1197,6 +1205,7 @@ function PaymentsLedger() {
 
       setEntrySelectedIds([]);
       setBillAllocations({});
+      setBillDeductions({});
       await loadData();
     } catch (err: any) {
       console.error("Entry error:", err);
@@ -1551,10 +1560,11 @@ function PaymentsLedger() {
                           <SortTh label={activeTab === "Customers" ? "Customer Name" : "Vendor Name"} active={sort.key === "name"} dir={sort.dir} onToggle={() => sort.toggle("name")} style={thStyle} />
                           <SortTh label={activeTab === "Customers" ? "Invoice Total (₹)" : "Bill Total (₹)"} active={sort.key === "total"} dir={sort.dir} onToggle={() => sort.toggle("total")} style={{ ...thStyle, textAlign: "right" }} align="right" />
                           <SortTh label={activeTab === "Customers" ? "Rec. (₹)" : "Paid (₹)"} active={sort.key === "received"} dir={sort.dir} onToggle={() => sort.toggle("received")} style={{ ...thStyle, textAlign: "right" }} align="right" />
-                          <SortTh label="Disc. (₹)" active={sort.key === "deduction"} dir={sort.dir} onToggle={() => sort.toggle("deduction")} style={{ ...thStyle, textAlign: "right" }} align="right" />
-                          <th style={{ ...thStyle, textAlign: "right", width: 90 }}>Pay Now (₹)</th>
-                          <SortTh label="Pending (₹)" active={sort.key === "pending"} dir={sort.dir} onToggle={() => sort.toggle("pending")} style={{ ...thStyle, textAlign: "right" }} align="right" />
-                          <SortTh label="Status" active={sort.key === "status"} dir={sort.dir} onToggle={() => sort.toggle("status")} style={{ ...thStyle, textAlign: "center" }} align="center" />
+                           <SortTh label="Disc. (₹)" active={sort.key === "deduction"} dir={sort.dir} onToggle={() => sort.toggle("deduction")} style={{ ...thStyle, textAlign: "right" }} align="right" />
+                           <th style={{ ...thStyle, textAlign: "right", width: 90 }}>Pay Now (₹)</th>
+                           <th style={{ ...thStyle, textAlign: "right", width: 90 }}>Disc. Now (₹)</th>
+                           <SortTh label="Pending (₹)" active={sort.key === "pending"} dir={sort.dir} onToggle={() => sort.toggle("pending")} style={{ ...thStyle, textAlign: "right" }} align="right" />
+                           <SortTh label="Status" active={sort.key === "status"} dir={sort.dir} onToggle={() => sort.toggle("status")} style={{ ...thStyle, textAlign: "center" }} align="center" />
                         </tr>
                       </thead>
                       <tbody>
@@ -1578,42 +1588,78 @@ function PaymentsLedger() {
                               <td style={{ ...tdStyle, textAlign: "right", fontWeight: 800 }}>{money(b.total)}</td>
                               <td style={{ ...tdStyle, textAlign: "right", color: "#15803d" }}>{money(b.received)}</td>
                               <td style={{ ...tdStyle, textAlign: "right", color: "#b45309" }}>{money(b.deduction)}</td>
-                              <td style={{ ...tdStyle, textAlign: "right" }}>
-                                <input
-                                  type="number"
-                                  step="0.01"
-                                  min="0"
-                                  max={b.pending}
-                                  disabled={!isChecked}
-                                  value={billAllocations[b.id] ?? ""}
-                                  placeholder={isChecked ? "0" : "-"}
-                                  onChange={(e) =>
-                                    setBillAllocations((prev) => {
-                                      const next = { ...prev };
-                                      const v = Number(e.target.value);
-                                      next[b.id] = isNaN(v) ? 0 : v;
-                                      return next;
-                                    })
-                                  }
-                                  onFocus={() => {
-                                    if (isChecked && billAllocations[b.id] === undefined) {
-                                      setBillAllocations((prev) => ({ ...prev, [b.id]: 0 }));
-                                    }
-                                  }}
-                                  style={{
-                                    width: "100%",
-                                    minWidth: 70,
-                                    padding: "4px 6px",
-                                    border: "1px solid #cbd5e1",
-                                    borderRadius: 6,
-                                    fontSize: 12,
-                                    fontWeight: 700,
-                                    textAlign: "right",
-                                    background: isChecked ? "#fff" : "#f1f5f9",
-                                    color: "#0f172a",
-                                  }}
-                                />
-                              </td>
+                               <td style={{ ...tdStyle, textAlign: "right" }}>
+                                 <input
+                                   type="number"
+                                   step="0.01"
+                                   min="0"
+                                   max={b.pending}
+                                   disabled={!isChecked}
+                                   value={billAllocations[b.id] ?? ""}
+                                   placeholder={isChecked ? "0" : "-"}
+                                   onChange={(e) =>
+                                     setBillAllocations((prev) => {
+                                       const next = { ...prev };
+                                       const v = Number(e.target.value);
+                                       next[b.id] = isNaN(v) ? 0 : v;
+                                       return next;
+                                     })
+                                   }
+                                   onFocus={() => {
+                                     if (isChecked && billAllocations[b.id] === undefined) {
+                                       setBillAllocations((prev) => ({ ...prev, [b.id]: 0 }));
+                                     }
+                                   }}
+                                   style={{
+                                     width: "100%",
+                                     minWidth: 70,
+                                     padding: "4px 6px",
+                                     border: "1px solid #cbd5e1",
+                                     borderRadius: 6,
+                                     fontSize: 12,
+                                     fontWeight: 700,
+                                     textAlign: "right",
+                                     background: isChecked ? "#fff" : "#f1f5f9",
+                                     color: "#0f172a",
+                                   }}
+                                 />
+                               </td>
+                               <td style={{ ...tdStyle, textAlign: "right" }}>
+                                 <input
+                                   type="number"
+                                   step="0.01"
+                                   min="0"
+                                   max={Math.max(0, b.pending - (Number(billAllocations[b.id] || 0) || 0))}
+                                   disabled={!isChecked}
+                                   value={billDeductions[b.id] ?? ""}
+                                   placeholder={isChecked ? "0" : "-"}
+                                   onChange={(e) =>
+                                     setBillDeductions((prev) => {
+                                       const next = { ...prev };
+                                       const v = Number(e.target.value);
+                                       next[b.id] = isNaN(v) ? 0 : v;
+                                       return next;
+                                     })
+                                   }
+                                   onFocus={() => {
+                                     if (isChecked && billDeductions[b.id] === undefined) {
+                                       setBillDeductions((prev) => ({ ...prev, [b.id]: 0 }));
+                                     }
+                                   }}
+                                   style={{
+                                     width: "100%",
+                                     minWidth: 70,
+                                     padding: "4px 6px",
+                                     border: "1px solid #cbd5e1",
+                                     borderRadius: 6,
+                                     fontSize: 12,
+                                     fontWeight: 700,
+                                     textAlign: "right",
+                                     background: isChecked ? "#fff" : "#f1f5f9",
+                                     color: "#b45309",
+                                   }}
+                                 />
+                               </td>
                               <td style={{ ...tdStyle, textAlign: "right", fontWeight: 700, color: "#dc2626" }}>{money(b.pending)}</td>
                               <td style={{ ...tdStyle, textAlign: "center" }}>
                                 <span

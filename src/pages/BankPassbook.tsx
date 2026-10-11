@@ -13,6 +13,7 @@ import {
   isCashAccount,
   loadBankAccounts,
   num,
+  resolveInOut,
   txnDate,
   withRunningBalance,
 } from "../lib/bankAccounts";
@@ -243,6 +244,33 @@ function BankPassbook() {
   }, [accounts, bankRows]);
 
   const grandTotal = useMemo(() => perAccount.reduce((sum, row) => sum + row.balance, 0), [perAccount]);
+
+  /**
+   * KPI card ("कुल सभी अकाउंट बैलेंस" / "अकाउंट बैलेंस") me opening balance bhi
+   * judna chahiye. Sirf IN - OUT dikhane se naya account opening balance ke saath
+   * add karne par poora total kam dikhta tha.
+   */
+  const scopedBalance = useMemo(() => {
+    if (selectedAccountId !== 0) {
+      const found = perAccount.find((row) => row.account.id === selectedAccountId);
+      return found ? found.balance : netBalance;
+    }
+    return perAccount
+      .filter((row) => view !== "cashbook" || isCashAccount(row.account))
+      .reduce((sum, row) => sum + row.balance, 0);
+  }, [selectedAccountId, perAccount, view, netBalance]);
+
+  /** Orphan rows (account_id null) ka asli net, warning me sahi amount dikhane ke liye. */
+  const orphanNet = useMemo(
+    () =>
+      bankRows
+        .filter((row) => !row.account_id && !isBounced(row))
+        .reduce((sum, row) => {
+          const { pIn, pOut } = resolveInOut(row);
+          return sum + pIn - pOut;
+        }, 0),
+    [bankRows]
+  );
 
   const filteredList = useMemo(
     () =>
@@ -829,10 +857,8 @@ function BankPassbook() {
           }}
         >
           ⚠️ <strong>{orphanTxnCount} transaction</strong> ka koi account nahi hai — inka paisa
-          &quot;सभी अकाउंट&quot; me dikhta hai par kisi account ke balance me nahi jaata. Isliye
-          &quot;कुल सभी अकाउंट बैलेंस&quot;, नीचे दिखने वाले account total से ₹
-          {Math.abs(netBalance - grandTotal).toLocaleString("en-IN", { minimumFractionDigits: 2 })} ka
-          farak hai.
+          Total IN / Total OUT me judta hai par kisi account ke balance me nahi jaata.
+          Asar: ₹ {Math.abs(orphanNet).toLocaleString("en-IN", { minimumFractionDigits: 2 })}.
           <br />
           <span style={{ fontSize: 12 }}>
             Theek karne ke liye Supabase me <code>bank-accounts-backfill-fix.sql</code>{" "}
@@ -855,7 +881,7 @@ function BankPassbook() {
             ₹ {totals.totalOut.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
           </strong>
         </div>
-        <div style={kpiBoxStyle(netBalance >= 0 ? "#eff6ff" : "#fff1f2")}>
+        <div style={kpiBoxStyle(scopedBalance >= 0 ? "#eff6ff" : "#fff1f2")}>
           <span style={kpiLabelStyle}>
             {selectedAccountId === 0 ? "कुल सभी अकाउंट बैलेंस" : "अकाउंट बैलेंस"}
           </span>
@@ -863,11 +889,11 @@ function BankPassbook() {
             style={{
               display: "block",
               fontSize: 22,
-              color: netBalance >= 0 ? "#1d4ed8" : "#be123c",
+              color: scopedBalance >= 0 ? "#1d4ed8" : "#be123c",
               marginTop: 4,
             }}
           >
-            ₹ {netBalance.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
+            ₹ {scopedBalance.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
           </strong>
           {selectedAccountId === 0 && (
             <span style={{ fontSize: 11, color: "#64748b" }}>

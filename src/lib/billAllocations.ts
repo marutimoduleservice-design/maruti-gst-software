@@ -66,13 +66,20 @@ export const applyAllocations = (
     const particulars = String(row.particulars || "");
     if (!particulars) return;
 
-    const explicit = new Map<string, number>();
+    const explicitPaid = new Map<string, number>();
+    const explicitDed = new Map<string, number>();
     let anyExplicit = false;
     refs.forEach((ref) => {
-      const m = particulars.match(new RegExp(`${escapeRegExp(ref)}:\\s*([\\d.]+)`));
-      if (m) {
-        explicit.set(ref, Number(m[1]) || 0);
+      // paid: REF: 500.00 (Disc: 18 optional)
+      const mPaid = particulars.match(new RegExp(`${escapeRegExp(ref)}:\\s*([\\d.]+)`));
+      if (mPaid) {
+        explicitPaid.set(ref, Number(mPaid[1]) || 0);
         anyExplicit = true;
+        // per-bill disc: REF: 500 Disc: 18
+        const mDed = particulars.match(new RegExp(`${escapeRegExp(ref)}:\\s*[\\d.]+[^,)]*?Disc:\\s*([\\d.]+)`));
+        if (mDed) {
+          explicitDed.set(ref, Number(mDed[1]) || 0);
+        }
       }
     });
 
@@ -85,15 +92,17 @@ export const applyAllocations = (
     if (referenced.length === 0) return;
 
     let remainingPaid = voucherAmount(row);
-    let remainingDeduction = Number(particulars.match(/\[Disc:\s*₹([\d.]+)\]/i)?.[1] || 0);
+    const globalDisc = Number(particulars.match(/\[Disc:\s*₹?([\d.]+)\]/i)?.[1] || 0);
+    const hasExplicitDed = explicitDed.size > 0;
+    let remainingDeduction = hasExplicitDed ? 0 : globalDisc; // per-bill explicit override global spread? but sum matches
 
     referenced.forEach((bill) => {
       const previous = target.get(bill.id) || { paid: 0, deduction: 0 };
       const outstandingBefore = Math.max(0, bill.total - previous.paid - previous.deduction);
 
       let paidForBill: number;
-      if (anyExplicit && explicit.has(bill.ref)) {
-        paidForBill = Math.min(explicit.get(bill.ref) || 0, outstandingBefore);
+      if (anyExplicit && explicitPaid.has(bill.ref)) {
+        paidForBill = Math.min(explicitPaid.get(bill.ref) || 0, outstandingBefore);
       } else if (anyExplicit) {
         paidForBill = 0;
       } else {
@@ -102,8 +111,15 @@ export const applyAllocations = (
       remainingPaid -= paidForBill;
 
       const outstandingAfter = Math.max(0, outstandingBefore - paidForBill);
-      const deductionForBill = Math.min(remainingDeduction, outstandingAfter);
-      remainingDeduction -= deductionForBill;
+      let deductionForBill = 0;
+      if (hasExplicitDed && explicitDed.has(bill.ref)) {
+        deductionForBill = Math.min(explicitDed.get(bill.ref) || 0, outstandingAfter);
+      } else if (!hasExplicitDed) {
+        deductionForBill = Math.min(remainingDeduction, outstandingAfter);
+        remainingDeduction -= deductionForBill;
+      } else {
+        deductionForBill = 0;
+      }
 
       target.set(bill.id, {
         paid: previous.paid + paidForBill,
