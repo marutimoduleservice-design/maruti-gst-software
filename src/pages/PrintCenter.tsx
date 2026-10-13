@@ -971,6 +971,121 @@ function PrintCenter() {
     if (activeTab === "ledger" && selectedCustomer) openDoc("Customer Ledger - " + (selectedCustomer.business_name || selectedCustomer.customer_name || ""), printBodyForLedger(selectedCustomer));
   };
 
+  // Bottom bar ka WhatsApp button — jo bhi tab/record selected hai uska PDF/image bhejo.
+  const sendSelectedDocWhatsApp = async (format: "pdf" | "png") => {
+    const inr = (v: number) =>
+      Number(v || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    let title = "";
+    let body: string | null = null;
+    let mobile: unknown = "";
+    let message = "";
+
+    if (activeTab === "po" && selectedPO) {
+      const vendor = vendorRecord(selectedPO.vendor_id, selectedPO.vendor_name);
+      const rows = purchases.filter((p) => String(p.purchase_no || "") === String(selectedPO.purchase_no || ""));
+      const total = rows.reduce((s, p) => s + (Number(p.total_amount) || Number(p.quantity || 0) * Number(p.rate || 0)), 0);
+      const name = vendor?.business_name || vendor?.name || vendorName(selectedPO.vendor_id, selectedPO.vendor_name) || "Supplier";
+      title = "Purchase PO - " + (selectedPO.purchase_no || "");
+      body = printBodyForPO(selectedPO);
+      mobile = vendor?.mobile;
+      message = `Dear ${name},\nPlease find attached Purchase Order ${selectedPO.purchase_no || ""} for Rs. ${inr(total)}.\nRegards, ${COMPANY.name} ${COMPANY.phone || COMPANY_PHONE}`;
+    } else if (activeTab === "invoice" && selectedInvoice) {
+      const inv = selectedInvoice;
+      const cust = customers.find((cc) => String(cc.id) === String(inv.customer_id));
+      const items = invoiceItems.filter((it) => String(it.invoice_id) === String(inv.id));
+      const total = items.length
+        ? items.reduce((s, it) => s + (Number(it.total) || Number(it.quantity || 0) * Number(it.rate || 0)), 0)
+        : Number(inv.total_amount) || 0;
+      const invReceipts = receipts.filter((rc) => (rc.customerRefs || []).some((r: any) => String(r.id) === String(inv.id)));
+      const receivedForInv = invReceipts.reduce((s, rc) => s + Number(rc.payment_in ?? rc.credit_amount ?? 0), 0);
+      const payTerm = cust?.payment_term || "Cash";
+      const dueDate = dueDateFromTerm(String(inv.invoice_date || ""), payTerm);
+      const outstanding = invoices
+        .filter((iv: any) => String(iv.customer_id) === String(inv.customer_id))
+        .reduce((s, iv: any) => s + Number(iv.pending_amount || 0), 0);
+      title = "Sales Invoice - " + (inv.invoice_no || "");
+      body = await buildSalesInvoiceBody({ invoice: inv, customer: cust, items, receivedAmount: receivedForInv, COMPANY });
+      mobile = cust?.mobile;
+      message = buildSalesInvoiceWhatsAppMessage({
+        customerName: cust?.business_name || cust?.customer_name || "Customer",
+        invoiceNo: String(inv.invoice_no || ""),
+        invoiceDate: fmtDate(inv.invoice_date),
+        amount: total,
+        dueDate: /10\s*(th|st)?\s*(of)?\s*(every\s+)?next\s*month/i.test(payTerm) ? "Date 10th Of Next Month" : fmtDate(dueDate),
+        outstanding,
+        companyName: COMPANY.name,
+        companyPhone: COMPANY.phone || COMPANY_PHONE,
+      });
+    } else if (activeTab === "receipt" && selectedReceipt) {
+      const refs = selectedReceipt.customerRefs || [];
+      const cust = refs[0] ? customerRecord(refs[0].customer_id) : null;
+      const amount = Number(selectedReceipt.payment_in ?? selectedReceipt.credit_amount ?? 0);
+      const name = cust?.business_name || cust?.customer_name || (refs[0] ? customerName(refs[0].customer_id) : "Customer");
+      title = "Payment Receipt";
+      body = printBodyForReceipt(selectedReceipt);
+      mobile = cust?.mobile;
+      message = `Dear ${name},\nPlease find attached payment receipt ${selectedReceipt.transaction_no || selectedReceipt.reference_no || ""} for Rs. ${inr(amount)}.\nThank you,\n${COMPANY.name} ${COMPANY.phone || COMPANY_PHONE}`;
+    } else if (activeTab === "payment" && selectedPayment) {
+      const vendorPart = String(selectedPayment.particulars || "").replace(/^Vendor Payment:\s*/i, "").split(/[\(\[]/)[0].trim() || "Supplier";
+      const vendor = vendors.find((vv) => String(vv.business_name || vv.name || "").toLowerCase() === vendorPart.toLowerCase());
+      const amount = Number(selectedPayment.payment_out ?? selectedPayment.debit_amount ?? 0);
+      title = "Payment Voucher";
+      body = printBodyForPayment(selectedPayment);
+      mobile = vendor?.mobile;
+      message = `Dear ${vendorPart},\nPlease find attached payment voucher ${selectedPayment.transaction_no || ""} for Rs. ${inr(amount)}.\nRegards, ${COMPANY.name} ${COMPANY.phone || COMPANY_PHONE}`;
+    } else if (activeTab === "ledger" && selectedCustomer) {
+      const pendingBody = printBodyForLedgerYear(selectedCustomer, "pending");
+      if (!pendingBody) return;
+      const name = selectedCustomer.business_name || selectedCustomer.customer_name || "Customer";
+      const startYear = fyStartYear(ledgerFY);
+      const { from, to } = fyFromStartYear(startYear);
+      const outstanding = invoices
+        .filter(
+          (iv: any) =>
+            String(iv.customer_id) === String(selectedCustomer.id) &&
+            String(iv.invoice_date || "") >= from &&
+            String(iv.invoice_date || "") <= to
+        )
+        .reduce((s, iv: any) => s + Number(iv.pending_amount ?? iv.total_amount ?? 0), 0);
+      title = "Customer Pending Ledger - " + name;
+      body = pendingBody;
+      mobile = selectedCustomer.mobile;
+      message = buildOutstandingWhatsAppMessage({
+        customerName: name,
+        outstanding,
+        companyName: COMPANY.name,
+        companyPhone: COMPANY.phone || COMPANY_PHONE,
+      });
+    } else {
+      alert("Pehle list se koi record select karein (👁 Preview par click), phir WhatsApp button dabayein.");
+      return;
+    }
+
+    if (!body) return;
+    setSharing(format);
+    try {
+      const files = await renderDocToFiles(title, body, COMPANY, { pdf: format === "pdf", png: format === "png" });
+      const blob = format === "pdf" ? files.pdf : files.png;
+      if (!blob) {
+        alert("File generate nahi ho payi. Dobara try karein.");
+        return;
+      }
+      const safe = title.replace(/[^\w]+/g, "_");
+      const filename = `${safe}-${new Date().toISOString().slice(0, 10)}.${format}`;
+      const res = await shareFileToWhatsApp({ mobile, message, filename, blob });
+      if (res === "downloaded") {
+        alert("File download ho gayi aur WhatsApp chat khul gaya. WhatsApp me file attach karke send kar dein.");
+      } else if (res === "no-number") {
+        alert("Valid WhatsApp number nahi mila. File download ho gayi, manually bhej dein.");
+      }
+    } catch (e) {
+      console.error(e);
+      alert("WhatsApp file banate waqt error aa gaya. Dobara try karein.");
+    } finally {
+      setSharing("");
+    }
+  };
+
   // Build lists for the current tab: parties (left) + their records (right)
   const buildLists = (): { parties: any[]; recordsFor: (pk: string) => any[] } => {
     if (activeTab === "po") {
@@ -1346,6 +1461,20 @@ function PrintCenter() {
                 }}
               >
                 🖨️ Print {TABS.find((t) => t.key === activeTab)?.label || ""}
+              </button>
+              <button
+                onClick={() => void sendSelectedDocWhatsApp("pdf")}
+                disabled={!canPrint || sharing !== ""}
+                style={{ background: canPrint ? "#25D366" : "#cbd5e1", color: "#fff", border: "none", padding: "12px 22px", borderRadius: 10, fontWeight: 800, fontSize: 14, cursor: canPrint && !sharing ? "pointer" : "not-allowed", display: "flex", alignItems: "center", gap: 8 }}
+              >
+                {sharing === "pdf" ? "⏳ Preparing..." : "💬 WhatsApp PDF"}
+              </button>
+              <button
+                onClick={() => void sendSelectedDocWhatsApp("png")}
+                disabled={!canPrint || sharing !== ""}
+                style={{ background: canPrint ? "#25D366" : "#cbd5e1", color: "#fff", border: "none", padding: "12px 22px", borderRadius: 10, fontWeight: 800, fontSize: 14, cursor: canPrint && !sharing ? "pointer" : "not-allowed", display: "flex", alignItems: "center", gap: 8 }}
+              >
+                {sharing === "png" ? "⏳ Preparing..." : "💬 WhatsApp Image"}
               </button>
             </div>
           </>
