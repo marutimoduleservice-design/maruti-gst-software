@@ -267,9 +267,12 @@ export const buildAllocations = (
 
   const accumulate = (billId: number, value: BillAllocation) => {
     const prev = allocations.get(billId) || { paid: 0, deduction: 0 };
+    // round2 per accumulation: warna multiple additions se 0.0000001 jaisa
+    // residual bachta hai jisse fully-paid bill "pending" (aur status Partial)
+    // dikhne lagta hai.
     allocations.set(billId, {
-      paid: prev.paid + value.paid,
-      deduction: prev.deduction + value.deduction,
+      paid: round2(prev.paid + value.paid),
+      deduction: round2(prev.deduction + value.deduction),
     });
   };
 

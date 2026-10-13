@@ -12,6 +12,7 @@ import {
   isReceiptRow,
   isVendorPaymentRow,
   loadDbAllocations,
+  round2,
   saveVoucherAllocations,
   voucherAllocRows,
   voucherAmount,
@@ -256,8 +257,8 @@ function PaymentsLedger() {
         const mappedPurchases = (pData as any[]).map((p: any) => {
           const allocation = purchaseAllocations.get(p.id) || { paid: 0, deduction: 0 };
           const totalAmount = Number(p.total_amount || 0);
-          const pendingAmount = Math.max(0, totalAmount - allocation.paid - allocation.deduction);
-          const status = pendingAmount <= 0 && totalAmount > 0
+          const pendingAmount = Math.max(0, round2(totalAmount - allocation.paid - allocation.deduction));
+          const status = pendingAmount <= 0.005 && totalAmount > 0
             ? "Paid"
             : allocation.paid > 0 || allocation.deduction > 0
               ? "Partial"
@@ -305,8 +306,8 @@ function PaymentsLedger() {
           const receivedAmount = allocation.paid;
           const deductionAmount = allocation.deduction;
           const totalAmount = Number(inv.total_amount || 0);
-          const pendingAmount = Math.max(0, totalAmount - receivedAmount - deductionAmount);
-          const status = pendingAmount <= 0 && totalAmount > 0
+          const pendingAmount = Math.max(0, round2(totalAmount - receivedAmount - deductionAmount));
+          const status = pendingAmount <= 0.005 && totalAmount > 0
             ? "Paid"
             : receivedAmount > 0 || deductionAmount > 0
               ? "Partial"
@@ -403,7 +404,7 @@ function PaymentsLedger() {
         .filter(
           (inv) => {
             const belongsToParty = String(inv.customer_id) === String(selectedPartyId);
-            const isPending = Number(inv.pending_amount ?? inv.total_amount ?? 0) > 0;
+            const isPending = Number(inv.pending_amount ?? inv.total_amount ?? 0) > 0.005;
             return belongsToParty && (isPending || !!editingVoucher);
           }
         )
@@ -424,7 +425,7 @@ function PaymentsLedger() {
         const match =
           String(p.vendor_id) === String(selectedPartyId) ||
           p.vendor_name === String(selectedPartyId);
-        const isPending = Number(p.pending_amount ?? p.total_amount ?? 0) > 0;
+        const isPending = Number(p.pending_amount ?? p.total_amount ?? 0) > 0.005;
         return match && (isPending || !!editingVoucher);
       })
       .map((p) => ({
