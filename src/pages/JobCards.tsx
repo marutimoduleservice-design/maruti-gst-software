@@ -43,6 +43,7 @@ type JobCard = {
 
   repairing_quantity: number | null;
   warranty_quantity: number | null;
+  warranty_ok_quantity: number | null;
   reject_quantity: number | null;
 
   remarks: string | null;
@@ -63,6 +64,7 @@ type FormState = {
 
   repairing_quantity: string;
   warranty_quantity: string;
+  warranty_ok_quantity: string;
   reject_quantity: string;
 
   service_type: string;
@@ -143,6 +145,7 @@ const initialForm = (): FormState => ({
 
   repairing_quantity: "",
   warranty_quantity: "",
+  warranty_ok_quantity: "",
   reject_quantity: "",
 
   service_type: SERVICE_TYPES[0],
@@ -227,30 +230,25 @@ function JobCards({ technicianScopeId }: { technicianScopeId?: number | null } =
       .select("id, name, mobile, share_percent")
       .order("name", { ascending: true });
 
-    const jobsResult = await sc("job_cards")
-      .select(
-        `
-        id,
-        job_no,
-        job_date,
-        customer_id,
-        business_name,
-        received_quantity,
-        service_type,
-        technician,
-        repairing_quantity,
-        warranty_quantity,
-        reject_quantity,
-        remarks,
-        status,
-        closed_at,
-        invoice_id,
-        created_at
-        `
-      )
+    const jobCardColumns =
+      "id, job_no, job_date, customer_id, business_name, received_quantity, service_type, technician, repairing_quantity, warranty_quantity, reject_quantity, remarks, status, closed_at, invoice_id, created_at";
+
+    // `warranty_ok_quantity` naya column hai. Migration na chali ho to bhi Job
+    // Cards page chalta rahe — pehle uske saath try karo, fail hone par bina
+    // uske dobara load karo (OK count tab 0 maana jayega).
+    let jobsResult: any = await sc("job_cards")
+      .select(`${jobCardColumns}, warranty_ok_quantity`)
       .order("id", {
         ascending: false,
       });
+
+    if (jobsResult.error) {
+      jobsResult = await sc("job_cards")
+        .select(jobCardColumns)
+        .order("id", {
+          ascending: false,
+        });
+    }
 
     if (customersResult.error) {
       console.error(customersResult.error);
@@ -349,6 +347,10 @@ function JobCards({ technicianScopeId }: { technicianScopeId?: number | null } =
 
   const warrantyQty = numberValue(
     form.warranty_quantity
+  );
+
+  const warrantyOkQty = numberValue(
+    form.warranty_ok_quantity
   );
 
   const rejectQty = numberValue(
@@ -454,6 +456,13 @@ function JobCards({ technicianScopeId }: { technicianScopeId?: number | null } =
         String(
           numberValue(
             job.warranty_quantity
+          )
+        ),
+
+      warranty_ok_quantity:
+        String(
+          numberValue(
+            job.warranty_ok_quantity
           )
         ),
 
@@ -595,10 +604,19 @@ function JobCards({ technicianScopeId }: { technicianScopeId?: number | null } =
     if (
       repairingQty < 0 ||
       warrantyQty < 0 ||
+      warrantyOkQty < 0 ||
       rejectQty < 0
     ) {
       alert(
         "Quantity negative nahi ho sakti."
+      );
+
+      return;
+    }
+
+    if (warrantyOkQty > warrantyQty) {
+      alert(
+        "Warranty OK quantity Warranty quantity se zyada nahi ho sakti."
       );
 
       return;
@@ -641,6 +659,9 @@ function JobCards({ technicianScopeId }: { technicianScopeId?: number | null } =
 
       warranty_quantity:
         warrantyQty,
+
+      warranty_ok_quantity:
+        warrantyOkQty,
 
       reject_quantity:
         rejectQty,
@@ -2115,6 +2136,90 @@ function JobCards({ technicianScopeId }: { technicianScopeId?: number | null } =
                   />
                 </div>
 
+                {/* WARRANTY OK */}
+
+                <div
+                  style={{
+                    marginTop: 14,
+                    padding:
+                      "14px 16px",
+                    borderRadius:
+                      10,
+                    background:
+                      "#ecfeff",
+                    border:
+                      "1px solid #a5f3fc",
+                    display:
+                      "flex",
+                    gap: 16,
+                    alignItems:
+                      "center",
+                    justifyContent:
+                      "space-between",
+                    flexWrap:
+                      "wrap",
+                  }}
+                >
+                  <div
+                    style={{
+                      flex:
+                        "1 1 240px",
+                    }}
+                  >
+                    <div
+                      style={{
+                        color:
+                          "#0e7490",
+                        fontSize: 13,
+                        fontWeight:
+                          800,
+                      }}
+                    >
+                      Warranty OK Qty
+                    </div>
+
+                    <div
+                      style={{
+                        color:
+                          "#0891b2",
+                        fontSize: 12,
+                        marginTop: 2,
+                        lineHeight:
+                          1.4,
+                      }}
+                    >
+                      Warranty me aaye modules me se check karne par kitne OK mile (kharab nahi). Net Profit ka Warranty % sirf faulty modules ginega.
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      width: 140,
+                    }}
+                  >
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={
+                        form.warranty_ok_quantity
+                      }
+                      onChange={(event) =>
+                        updateForm(
+                          "warranty_ok_quantity",
+                          event.target.value
+                        )
+                      }
+                      placeholder="0"
+                      style={{
+                        ...inputStyle,
+                        fontSize: 17,
+                        fontWeight: 700,
+                      }}
+                    />
+                  </div>
+                </div>
+
                 {/* TOTAL */}
 
                 <div
@@ -2858,7 +2963,7 @@ function JobCards({ technicianScopeId }: { technicianScopeId?: number | null } =
                     display:
                       "grid",
                     gridTemplateColumns:
-                      "repeat(3,1fr)",
+                      "repeat(4,1fr)",
                     gap: 14,
                   }}
                 >
@@ -2873,6 +2978,13 @@ function JobCards({ technicianScopeId }: { technicianScopeId?: number | null } =
                     label="Warranty"
                     value={numberValue(
                       viewing.warranty_quantity
+                    )}
+                  />
+
+                  <QuantityView
+                    label="Warranty OK"
+                    value={numberValue(
+                      viewing.warranty_ok_quantity
                     )}
                   />
 
