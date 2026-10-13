@@ -213,6 +213,11 @@ export const openPrintWindow = (
   .terms-box ol li { margin-bottom: 3px; }
   .inv-summary { display: flex; justify-content: flex-end; margin: 10px 0; font-size: 13px; }
   .inv-summary .sum-box { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 18px; font-weight: 800; color: #0f172a; }
+  .module-summary { display: flex; gap: 12px; margin: 10px 0; flex-wrap: wrap; }
+  .module-summary > div { flex: 1; min-width: 230px; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px 12px; background: #f8fafc; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .module-summary .ms-lbl { font-size: 11px; font-weight: 800; color: #334155; text-transform: uppercase; letter-spacing: 0.6px; }
+  .module-summary b { font-size: 15px; color: #0f172a; }
+  .module-summary .ms-note { font-size: 10px; color: #94a3b8; }
 </style></head><body>
 <div class="preview-bar">
   <div class="p-title">📄 ${esc(title)} — Preview</div>
@@ -279,6 +284,22 @@ export const buildSalesInvoiceBody = async (params: {
         <td class="r">${money(total)}</td>
         <td class="r">${money(total)}</td>
       </tr>`;
+  const nameOf = (it: any) => String(it.item_name || "").toLowerCase();
+  const qtyOf = (it: any) => Number(it.quantity) || 0;
+  const sumQty = (match: (n: string) => boolean) =>
+    items.filter((it: any) => match(nameOf(it))).reduce((s, it: any) => s + qtyOf(it), 0);
+  const moduleQty = sumQty((n) => n.includes("module service"));
+  const totalModules =
+    moduleQty +
+    sumQty((n) => n.includes("warranty service")) +
+    sumQty((n) => n.includes("reject module"));
+  const perModule = moduleQty > 0 ? total / moduleQty : 0;
+  const moduleSummary = totalModules > 0
+    ? `<div class="module-summary">
+    <div><span class="ms-lbl">Total Module / Card</span><b>${totalModules.toFixed(2)}</b><span class="ms-note">Module Service + Warranty Service + Reject Module</span></div>
+    <div><span class="ms-lbl">Per Module / Ciel Card</span><b>${money(perModule)}</b><span class="ms-note">Grand Total / Module Service Qty</span></div>
+  </div>`
+    : "";
   const receivedForInv = Number(params.receivedAmount || 0);
   const invStatus = receivedForInv >= total && total > 0 ? "Paid" : "Pending";
   const payTerm = customer?.payment_term || "Cash";
@@ -316,6 +337,7 @@ export const buildSalesInvoiceBody = async (params: {
     <tbody>${itemRows}</tbody>
     <tr class="tot-row"><td colspan="4" style="text-align:right">Grand Total</td><td class="r">${money(total)}</td></tr>
   </table>
+  ${moduleSummary}
   <div class="amount-words"><b>Amount In Words:</b> ${numToWords(Math.round(total))} Rupees Only</div>
   <table class="pay-table">
     <tr class="tot-row"><td class="r" style="text-align:left;background:#f8fafc" colspan="5"><b>Payment Details — For ${esc(COMPANY.bank_account_holder || COMPANY.name)}</b></td></tr>
