@@ -4,9 +4,7 @@ import { fmtDate } from "../lib/formatDate";
 import { SortTh, useSortedRows } from "../lib/tableSort";
 import {
   COMPANY_PHONE,
-  esc,
   makeDefaultCompany,
-  renderDocToFiles,
   shareFileToWhatsApp,
   type InvoicePrintCompany,
 } from "../lib/salesInvoiceTemplate";
@@ -784,48 +782,6 @@ function JobCards({ technicianScopeId }: { technicianScopeId?: number | null } =
     );
     const total = jobTotalReceived(job);
 
-    const photo =
-      viewImage &&
-      String(viewImage).startsWith("data:")
-        ? `<div style="text-align:center;margin-top:10px"><img src="${esc(
-            viewImage
-          )}" alt="Module" style="max-width:100%;max-height:240px;border-radius:8px;border:1px solid #e2e8f0"/></div>`
-        : "";
-
-    const body = `
-  <div class="doc-title">JOB CARD</div>
-  <div class="doc-band">${esc(jobNo)} &nbsp;•&nbsp; ${esc(
-      dateText
-    )}</div>
-  <div class="meta-grid">
-    <div class="party-box">
-      <div class="lbl">Customer</div>
-      <div class="name">${esc(customerName)}</div>
-      <div>${customer?.business_address ? esc(customer.business_address) : ""}</div>
-      <div>${customer?.mobile ? "Mobile: " + esc(customer.mobile) : ""}</div>
-    </div>
-    <div class="info-box">
-      <div class="info-row"><span>Job No</span><b>${esc(jobNo)}</b></div>
-      <div class="info-row"><span>Job Date</span><b>${esc(dateText)}</b></div>
-      <div class="info-row"><span>Status</span><b>${esc(job.status || "Open")}</b></div>
-      <div class="info-row"><span>Service Type</span><b>${esc(job.service_type || "-")}</b></div>
-    </div>
-  </div>
-  <table class="inv-items">
-    <thead><tr><th>Module Details</th><th class="c" style="width:90px">Qty</th></tr></thead>
-    <tbody>
-      <tr><td>Repairing</td><td class="c">${repairing}</td></tr>
-      <tr><td>Warranty</td><td class="c">${warranty}</td></tr>
-      <tr><td>Warranty OK</td><td class="c">${warrantyOk}</td></tr>
-      <tr><td>Reject</td><td class="c">${reject}</td></tr>
-    </tbody>
-    <tr class="tot-row"><td style="text-align:right">Total Modules Received</td><td class="c">${total}</td></tr>
-  </table>
-  ${photo}
-  <div class="amount-words"><b>Total ${total} Module receive ho gaye hain.</b>${
-      job.remarks ? ` ${esc(job.remarks)}` : ""
-    }</div>`;
-
     const message =
       `${customerName} 🙏\n\n` +
       `${company.name} me aapka Job Card *${jobNo}* (${dateText}) ke against\n` +
@@ -837,49 +793,52 @@ function JobCards({ technicianScopeId }: { technicianScopeId?: number | null } =
         company.phone || COMPANY_PHONE
       }`;
 
+    // WhatsApp par wahi module photo bhejni hai jo job card me upload/capture ki gayi hai.
+    const photoUrl = viewImage;
+
+    if (!photoUrl) {
+      alert(
+        "Is Job Card me module photo upload nahi hai. Pehle photo add karein, phir WhatsApp bhejein."
+      );
+
+      return;
+    }
+
     setSharingJobCard(true);
 
     try {
-      const files = await renderDocToFiles(
-        `Job Card - ${jobNo}`,
-        body,
-        company,
-        { png: true }
-      );
+      const response = await fetch(photoUrl);
+      const blob = await response.blob();
 
-      if (!files.png) {
-        alert(
-          "Job Card image generate nahi ho payi. Dobara try karein."
-        );
-
-        return;
-      }
+      const ext = blob.type.includes("png")
+        ? "png"
+        : "jpg";
 
       const filename = `JobCard-${String(jobNo).replace(
         /[^\w]+/g,
         "_"
-      )}.png`;
+      )}.${ext}`;
 
       const res = await shareFileToWhatsApp({
         mobile: customer?.mobile,
         message,
         filename,
-        blob: files.png,
+        blob,
       });
 
       if (res === "downloaded") {
         alert(
-          "Job Card image download ho gayi aur WhatsApp khul gaya. Image attach karke send kar dein."
+          "Module photo download ho gayi aur WhatsApp khul gaya. Photo attach karke send kar dein."
         );
       } else if (res === "no-number") {
         alert(
-          "Customer ka valid WhatsApp number nahi mila. Image download ho gayi, manually bhej dein."
+          "Customer ka valid WhatsApp number nahi mila. Photo download ho gayi, manually bhej dein."
         );
       }
     } catch (error) {
       console.error(error);
       alert(
-        "WhatsApp image banate waqt error aa gaya. Dobara try karein."
+        "WhatsApp photo bhejte waqt error aa gaya. Dobara try karein."
       );
     } finally {
       setSharingJobCard(false);
