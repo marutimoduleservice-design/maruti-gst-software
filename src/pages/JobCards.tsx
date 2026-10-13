@@ -2,6 +2,14 @@ import { sc } from "../lib/company";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fmtDate } from "../lib/formatDate";
 import { SortTh, useSortedRows } from "../lib/tableSort";
+import {
+  COMPANY_PHONE,
+  esc,
+  makeDefaultCompany,
+  renderDocToFiles,
+  shareFileToWhatsApp,
+  type InvoicePrintCompany,
+} from "../lib/salesInvoiceTemplate";
 
 type Customer = {
   id: number;
@@ -214,12 +222,51 @@ function JobCards({ technicianScopeId }: { technicianScopeId?: number | null } =
   const [dateFilter, setDateFilter] =
     useState("");
 
+  // WhatsApp job card image ke header ke liye company details.
+  const [company, setCompany] =
+    useState<InvoicePrintCompany>(() =>
+      makeDefaultCompany()
+    );
+
+  const [sharingJobCard, setSharingJobCard] =
+    useState(false);
+
   // =====================================================
   // LOAD DATA WITH INSTANT CACHING
   // =====================================================
 
   const loadData = async () => {
     if (jobs.length === 0) setLoading(true);
+
+    const companyResult = await sc("company_settings")
+      .select("*")
+      .limit(1);
+
+    const companyRow = companyResult.data?.[0];
+
+    if (companyRow) {
+      setCompany((prev) => ({
+        ...prev,
+        name: companyRow.business_name || prev.name,
+        tagline: companyRow.tagline || prev.tagline,
+        address: companyRow.business_address || prev.address,
+        phone: companyRow.phone || "",
+        email: companyRow.email || "",
+        gstin: companyRow.gstin || "",
+        pan: companyRow.pan || "",
+        state_code: companyRow.state_code || prev.state_code,
+        udyam_number: companyRow.udyam_number || prev.udyam_number,
+        bank_name: companyRow.bank_name || "",
+        bank_account_holder: companyRow.bank_account_holder || "",
+        bank_account_number: companyRow.bank_account_number || "",
+        bank_ifsc: companyRow.bank_ifsc || "",
+        upi_id: companyRow.upi_id || "",
+        signature_name: companyRow.signature_name || prev.signature_name,
+        website: companyRow.website || "",
+        po_terms: companyRow.po_terms || "",
+        sales_terms: companyRow.sales_terms || "",
+      }));
+    }
 
     const customersResult = await sc("customers")
       .select(
@@ -696,6 +743,148 @@ function JobCards({ technicianScopeId }: { technicianScopeId?: number | null } =
         .forEach((track) => track.stop());
     };
   }, []);
+
+  // =====================================================
+  // JOB CARD — WHATSAPP (IMAGE)
+  // =====================================================
+
+  const jobTotalReceived = (job: JobCard) =>
+    numberValue(job.repairing_quantity) +
+    numberValue(job.warranty_quantity) +
+    numberValue(job.warranty_ok_quantity) +
+    numberValue(job.reject_quantity);
+
+  const shareJobCardWhatsApp = async (
+    job: JobCard
+  ) => {
+    const customer = customers.find(
+      (c) => c.id === job.customer_id
+    );
+
+    const customerName =
+      customer?.business_name ||
+      customer?.customer_name ||
+      job.business_name ||
+      "Customer";
+
+    const jobNo = jobNumber(job.job_no, job.id);
+    const dateText = fmtDate(job.job_date) || "-";
+
+    const repairing = numberValue(
+      job.repairing_quantity
+    );
+    const warranty = numberValue(
+      job.warranty_quantity
+    );
+    const warrantyOk = numberValue(
+      job.warranty_ok_quantity
+    );
+    const reject = numberValue(
+      job.reject_quantity
+    );
+    const total = jobTotalReceived(job);
+
+    const photo =
+      viewImage &&
+      String(viewImage).startsWith("data:")
+        ? `<div style="text-align:center;margin-top:10px"><img src="${esc(
+            viewImage
+          )}" alt="Module" style="max-width:100%;max-height:240px;border-radius:8px;border:1px solid #e2e8f0"/></div>`
+        : "";
+
+    const body = `
+  <div class="doc-title">JOB CARD</div>
+  <div class="doc-band">${esc(jobNo)} &nbsp;•&nbsp; ${esc(
+      dateText
+    )}</div>
+  <div class="meta-grid">
+    <div class="party-box">
+      <div class="lbl">Customer</div>
+      <div class="name">${esc(customerName)}</div>
+      <div>${customer?.business_address ? esc(customer.business_address) : ""}</div>
+      <div>${customer?.mobile ? "Mobile: " + esc(customer.mobile) : ""}</div>
+    </div>
+    <div class="info-box">
+      <div class="info-row"><span>Job No</span><b>${esc(jobNo)}</b></div>
+      <div class="info-row"><span>Job Date</span><b>${esc(dateText)}</b></div>
+      <div class="info-row"><span>Status</span><b>${esc(job.status || "Open")}</b></div>
+      <div class="info-row"><span>Service Type</span><b>${esc(job.service_type || "-")}</b></div>
+    </div>
+  </div>
+  <table class="inv-items">
+    <thead><tr><th>Module Details</th><th class="c" style="width:90px">Qty</th></tr></thead>
+    <tbody>
+      <tr><td>Repairing</td><td class="c">${repairing}</td></tr>
+      <tr><td>Warranty</td><td class="c">${warranty}</td></tr>
+      <tr><td>Warranty OK</td><td class="c">${warrantyOk}</td></tr>
+      <tr><td>Reject</td><td class="c">${reject}</td></tr>
+    </tbody>
+    <tr class="tot-row"><td style="text-align:right">Total Modules Received</td><td class="c">${total}</td></tr>
+  </table>
+  ${photo}
+  <div class="amount-words"><b>Total ${total} Module receive ho gaye hain.</b>${
+      job.remarks ? ` ${esc(job.remarks)}` : ""
+    }</div>`;
+
+    const message =
+      `${customerName} 🙏\n\n` +
+      `${company.name} me aapka Job Card *${jobNo}* (${dateText}) ke against\n` +
+      `✅ Total *${total} Module* receive ho gaye hain.\n\n` +
+      `Repairing: ${repairing}   Warranty: ${warranty}\n` +
+      `Warranty OK: ${warrantyOk}    Reject: ${reject}\n\n` +
+      `Repair kaam poora hote hi hum aapko inform kar denge.\n` +
+      `Dhanyavaad 🙏\n${company.name} | ${
+        company.phone || COMPANY_PHONE
+      }`;
+
+    setSharingJobCard(true);
+
+    try {
+      const files = await renderDocToFiles(
+        `Job Card - ${jobNo}`,
+        body,
+        company,
+        { png: true }
+      );
+
+      if (!files.png) {
+        alert(
+          "Job Card image generate nahi ho payi. Dobara try karein."
+        );
+
+        return;
+      }
+
+      const filename = `JobCard-${String(jobNo).replace(
+        /[^\w]+/g,
+        "_"
+      )}.png`;
+
+      const res = await shareFileToWhatsApp({
+        mobile: customer?.mobile,
+        message,
+        filename,
+        blob: files.png,
+      });
+
+      if (res === "downloaded") {
+        alert(
+          "Job Card image download ho gayi aur WhatsApp khul gaya. Image attach karke send kar dein."
+        );
+      } else if (res === "no-number") {
+        alert(
+          "Customer ka valid WhatsApp number nahi mila. Image download ho gayi, manually bhej dein."
+        );
+      }
+    } catch (error) {
+      console.error(error);
+      alert(
+        "WhatsApp image banate waqt error aa gaya. Dobara try karein."
+      );
+    } finally {
+      setSharingJobCard(false);
+    }
+  };
 
   // =====================================================
   // SAVE JOB CARD
@@ -3373,6 +3562,42 @@ function JobCards({ technicianScopeId }: { technicianScopeId?: number | null } =
                   }}
                 >
                   Close
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    shareJobCardWhatsApp(
+                      viewing
+                    )
+                  }
+                  disabled={
+                    sharingJobCard
+                  }
+                  title="WhatsApp par Job Card image bhejein"
+                  style={{
+                    padding:
+                      "10px 18px",
+                    border: "none",
+                    background:
+                      sharingJobCard
+                        ? "#86efac"
+                        : "#25D366",
+                    color:
+                      "#ffffff",
+                    borderRadius:
+                      9,
+                    cursor:
+                      sharingJobCard
+                        ? "default"
+                        : "pointer",
+                    fontWeight:
+                      700,
+                  }}
+                >
+                  {sharingJobCard
+                    ? "Bhej rahe..."
+                    : "💬 WhatsApp Photo"}
                 </button>
 
                 {viewing.status !==
