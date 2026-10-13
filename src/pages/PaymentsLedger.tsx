@@ -88,15 +88,30 @@ const money = (value: number) =>
 
 // Voucher particulars carry either "REF: 500.00" per bill (partial payments) or
 // just a comma list of refs when a single bill is settled in full.
+//
+// Per-bill discount ("REF: 500.00 Disc: 18.00") bhi yahin likhna ZAROORI hai.
+// Sirf global `[Disc: ₹X]` likhne par parser us discount ko "voucher-level"
+// maan kar oldest bill par daal deta hai — jabki user ne wo ek khaas bill par
+// daala tha. Isliye jis bill par discount ho, uska Disc tag usi ref ke saath
+// chapta hai.
 const formatBillRefs = (
   bills: { id: number; ref: string }[],
-  allocations: Record<number, number>
+  allocations: Record<number, number>,
+  deductions: Record<number, number> = {}
 ) => {
   const hasExplicit = bills.length > 0 && bills.every((b) => (Number(allocations[b.id] || 0) || 0) > 0);
+  const hasDisc = bills.some((b) => (Number(deductions[b.id] || 0) || 0) > 0);
   const refs = bills
-    .map((b) => (hasExplicit ? `${b.ref}:${(Number(allocations[b.id] || 0) || 0).toFixed(2)}` : b.ref))
+    .map((b) => {
+      const paid = Number(allocations[b.id] || 0) || 0;
+      const ded = Number(deductions[b.id] || 0) || 0;
+      if (hasExplicit || hasDisc) {
+        return `${b.ref}:${paid.toFixed(2)}${ded > 0 ? ` Disc: ${ded.toFixed(2)}` : ""}`;
+      }
+      return b.ref;
+    })
     .join(", ");
-  return { hasExplicit, refs };
+  return { hasExplicit, hasDisc, refs };
 };
 
 // A voucher row can carry per-bill amounts ("INV-01: 500, INV-02: 300") or only a
@@ -594,13 +609,16 @@ function PaymentsLedger() {
       if (dbAlloc && dbAlloc.size > 0) {
         const ids: number[] = [];
         const alloc: Record<number, number> = {};
+        const ded: Record<number, number> = {};
         dbAlloc.forEach((v, id) => {
           if (!invById.has(id)) return;
           ids.push(id);
           alloc[id] = v.paid;
+          if (v.deduction) ded[id] = v.deduction;
         });
         setEntrySelectedIds(ids);
         setBillAllocations(alloc);
+        setBillDeductions(ded);
       } else {
         const refNos = invoices
           .map((i) => String(i.invoice_no || ""))
@@ -610,26 +628,33 @@ function PaymentsLedger() {
           .map((i) => i.id);
         setEntrySelectedIds(ids);
         const alloc: Record<number, number> = {};
+        const ded: Record<number, number> = {};
         invoices.forEach((inv) => {
           const no = String(inv.invoice_no || "");
           if (!no) return;
           const m = particulars.match(new RegExp(escapeRegExp(no) + ":\\s*([\\d.]+)"));
           if (m) alloc[inv.id] = Number(m[1]) || 0;
+          const mD = particulars.match(new RegExp(escapeRegExp(no) + ":\\s*[\\d.]+[^,)]*?Disc:\\s*([\\d.]+)"));
+          if (mD) ded[inv.id] = Number(mD[1]) || 0;
         });
         setBillAllocations(alloc);
+        setBillDeductions(ded);
       }
     } else {
       const purById = new Map(purchases.map((p) => [Number(p.id), p]));
       if (dbAlloc && dbAlloc.size > 0) {
         const ids: number[] = [];
         const alloc: Record<number, number> = {};
+        const ded: Record<number, number> = {};
         dbAlloc.forEach((v, id) => {
           if (!purById.has(id)) return;
           ids.push(id);
           alloc[id] = v.paid;
+          if (v.deduction) ded[id] = v.deduction;
         });
         setEntrySelectedIds(ids);
         setBillAllocations(alloc);
+        setBillDeductions(ded);
       } else {
         const refNos = purchases
           .map((p) => String(p.inward_no || p.purchase_no || `INW-${p.id}`))
@@ -639,13 +664,17 @@ function PaymentsLedger() {
           .map((p) => p.id);
         setEntrySelectedIds(ids);
         const alloc: Record<number, number> = {};
+        const ded: Record<number, number> = {};
         purchases.forEach((p) => {
           const ref = String(p.inward_no || p.purchase_no || `INW-${p.id}`);
           if (!ref) return;
           const m = particulars.match(new RegExp(escapeRegExp(ref) + ":\\s*([\\d.]+)"));
           if (m) alloc[p.id] = Number(m[1]) || 0;
+          const mD = particulars.match(new RegExp(escapeRegExp(ref) + ":\\s*[\\d.]+[^,)]*?Disc:\\s*([\\d.]+)"));
+          if (mD) ded[p.id] = Number(mD[1]) || 0;
         });
         setBillAllocations(alloc);
+        setBillDeductions(ded);
       }
     }
   };
@@ -880,7 +909,8 @@ function PaymentsLedger() {
       const selectedInvs = invoices.filter((i) => entrySelectedIds.includes(i.id));
       const { hasExplicit, refs: invNos } = formatBillRefs(
         selectedInvs.map((i) => ({ id: i.id, ref: String(i.invoice_no || "") })),
-        billAllocations
+        billAllocations,
+        billDeductions
       );
       const custName = selectedParty?.name || "Customer";
       const record = {
@@ -907,7 +937,8 @@ function PaymentsLedger() {
       const selectedBills = purchases.filter((p) => entrySelectedIds.includes(p.id));
       const { hasExplicit, refs: inwardNos } = formatBillRefs(
         selectedBills.map((p) => ({ id: p.id, ref: String(p.inward_no || p.purchase_no || `INW-${p.id}`) })),
-        billAllocations
+        billAllocations,
+        billDeductions
       );
       const vendorName = selectedParty?.name || "Vendor";
       const record = {
@@ -1006,7 +1037,8 @@ function PaymentsLedger() {
           const selectedInvs = invoices.filter((i) => entrySelectedIds.includes(i.id));
           const { refs: invNos } = formatBillRefs(
             selectedInvs.map((i) => ({ id: i.id, ref: String(i.invoice_no || "") })),
-            billAllocations
+            billAllocations,
+            billDeductions
           );
           const custName = selectedParty?.name || "Customer";
 
@@ -1064,7 +1096,8 @@ function PaymentsLedger() {
           const selectedBills = purchases.filter((p) => entrySelectedIds.includes(p.id));
           const { refs: inwardNos } = formatBillRefs(
             selectedBills.map((p) => ({ id: p.id, ref: String(p.inward_no || p.purchase_no || `INW-${p.id}`) })),
-            billAllocations
+            billAllocations,
+            billDeductions
           );
           const vendorName = selectedParty?.name || "Vendor";
 
