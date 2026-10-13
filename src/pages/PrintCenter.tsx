@@ -11,6 +11,7 @@ import { currentFY, fyFromStartYear, fyOptions, fyStartYear } from "../lib/finan
 import {
   buildSalesInvoiceBody,
   buildSalesInvoiceWhatsAppMessage,
+  buildOutstandingWhatsAppMessage,
   COMPANY_PHONE,
   dueDateFromTerm,
   esc,
@@ -18,6 +19,8 @@ import {
   money,
   numToWords,
   openPrintWindow as openDocWindow,
+  renderDocToFiles,
+  shareFileToWhatsApp,
   type WhatsAppShare,
 } from "../lib/salesInvoiceTemplate";
 
@@ -79,6 +82,7 @@ function PrintCenter() {
   const [activePartyKey, setActivePartyKey] = useState<string>("");
   const [quickQuery, setQuickQuery] = useState("");
   const [ledgerFY, setLedgerFY] = useState<string>(() => currentFY().label);
+  const [sharing, setSharing] = useState<"" | "pdf" | "png">("");
 
   useEffect(() => {
     (async () => {
@@ -788,6 +792,57 @@ function PrintCenter() {
   </div>`;
   };
 
+  // Customer ka pending/outstanding statement PDF ya Image banakar WhatsApp par bhejo.
+  const sendPendingOutstandingWhatsApp = async (party: any, format: "pdf" | "png") => {
+    const cust = party ? customers.find((c) => String(c.id) === String(party.key)) || null : null;
+    const target = cust || party;
+    if (!target) return;
+    const body = printBodyForLedgerYear(target, "pending");
+    if (!body) return;
+    const name = target.business_name || target.customer_name || target.name || "Customer";
+    const startYear = fyStartYear(ledgerFY);
+    const { from, to } = fyFromStartYear(startYear);
+    const outstanding = invoices
+      .filter(
+        (iv) =>
+          String(iv.customer_id) === String(target.id) &&
+          String(iv.invoice_date || "") >= from &&
+          String(iv.invoice_date || "") <= to
+      )
+      .reduce((s, iv: any) => s + Number(iv.pending_amount ?? iv.total_amount ?? 0), 0);
+    setSharing(format);
+    try {
+      const files = await renderDocToFiles(`Customer Pending Ledger - ${name}`, body, COMPANY, {
+        pdf: format === "pdf",
+        png: format === "png",
+      });
+      const blob = format === "pdf" ? files.pdf : files.png;
+      if (!blob) {
+        alert("File generate nahi ho payi. Dobara try karein.");
+        return;
+      }
+      const message = buildOutstandingWhatsAppMessage({
+        customerName: name,
+        outstanding,
+        companyName: COMPANY.name,
+        companyPhone: COMPANY.phone || COMPANY_PHONE,
+      });
+      const safe = name.replace(/[^\w]+/g, "_");
+      const filename = `Outstanding-${safe}-${new Date().toISOString().slice(0, 10)}.${format}`;
+      const res = await shareFileToWhatsApp({ mobile: target.mobile, message, filename, blob });
+      if (res === "downloaded") {
+        alert("File download ho gayi aur WhatsApp chat khul gaya. WhatsApp me file attach karke send kar dein.");
+      } else if (res === "no-number") {
+        alert(`${name} ka valid WhatsApp number nahi mila. File download ho gayi, manually bhej dein.`);
+      }
+    } catch (e) {
+      console.error(e);
+      alert("WhatsApp file banate waqt error aa gaya. Dobara try karein.");
+    } finally {
+      setSharing("");
+    }
+  };
+
   const printBodyForAllPartyPending = () => {
     const startYear = fyStartYear(ledgerFY);
     const { from, to } = fyFromStartYear(startYear);
@@ -1176,6 +1231,20 @@ function PrintCenter() {
                   style={{ background: allPartyActive ? "#cbd5e1" : "#b91c1c", color: "#fff", border: "none", borderRadius: 9, padding: "9px 14px", fontWeight: 800, fontSize: 12, cursor: allPartyActive ? "not-allowed" : "pointer", opacity: allPartyActive ? 0.7 : 1 }}
                 >
                   🖨️ Pending Ledger PDF
+                </button>
+                <button
+                  onClick={() => void sendPendingOutstandingWhatsApp(activeParty, "pdf")}
+                  disabled={allPartyActive || sharing !== ""}
+                  style={{ background: allPartyActive ? "#cbd5e1" : "#25D366", color: "#fff", border: "none", borderRadius: 9, padding: "9px 14px", fontWeight: 800, fontSize: 12, cursor: allPartyActive || sharing ? "not-allowed" : "pointer", opacity: allPartyActive || sharing ? 0.7 : 1 }}
+                >
+                  {sharing === "pdf" ? "⏳ Preparing..." : "💬 WhatsApp PDF"}
+                </button>
+                <button
+                  onClick={() => void sendPendingOutstandingWhatsApp(activeParty, "png")}
+                  disabled={allPartyActive || sharing !== ""}
+                  style={{ background: allPartyActive ? "#cbd5e1" : "#25D366", color: "#fff", border: "none", borderRadius: 9, padding: "9px 14px", fontWeight: 800, fontSize: 12, cursor: allPartyActive || sharing ? "not-allowed" : "pointer", opacity: allPartyActive || sharing ? 0.7 : 1 }}
+                >
+                  {sharing === "png" ? "⏳ Preparing..." : "💬 WhatsApp Image"}
                 </button>
                 {allPartyActive && (
                   <button

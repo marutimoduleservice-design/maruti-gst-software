@@ -1,4 +1,6 @@
 import QRCode from "qrcode";
+import { jsPDF } from "jspdf";
+import { toPng } from "html-to-image";
 import { SIGNATURE_DATA_URL } from "./signatureData";
 import { fmtDate } from "./formatDate";
 
@@ -147,18 +149,7 @@ export const buildSalesInvoiceWhatsAppMessage = (p: {
   );
 };
 
-export const openPrintWindow = (
-  title: string,
-  body: string,
-  COMPANY: InvoicePrintCompany,
-  whatsapp?: WhatsAppShare
-): void => {
-  const waLink = whatsapp ? whatsappHref(whatsapp.mobile, whatsapp.message) : "";
-  const waButton = waLink
-    ? `<a class="btn-wa" href="${esc(waLink)}" target="_blank" rel="noopener">💬 WhatsApp</a>`
-    : "";
-  const html = `<!doctype html><html><head><meta charset="utf-8"/><title>${esc(title)}</title>
-<style>
+export const PRINT_CSS = `
   * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   @page { size: A4; margin: 5mm 5mm; }
   html { margin: 0; padding: 0; }
@@ -218,15 +209,16 @@ export const openPrintWindow = (
   .module-summary .ms-lbl { font-size: 11px; font-weight: 800; color: #334155; text-transform: uppercase; letter-spacing: 0.6px; }
   .module-summary b { font-size: 15px; color: #0f172a; }
   .module-summary .ms-note { font-size: 10px; color: #94a3b8; }
-</style></head><body>
-<div class="preview-bar">
-  <div class="p-title">📄 ${esc(title)} — Preview</div>
-  <div class="p-btns">
-    ${waButton}
-    <button class="btn-print" onclick="window.print()">🖨️ Print Now</button>
-    <button class="btn-close" onclick="window.close()">✕ Close</button>
-  </div>
-</div>
+`;
+
+export const buildDocHtml = (
+  title: string,
+  body: string,
+  COMPANY: InvoicePrintCompany,
+  previewBar = ""
+): string => `<!doctype html><html><head><meta charset="utf-8"/><title>${esc(title)}</title>
+<style>${PRINT_CSS}</style></head><body>
+${previewBar}
 <div class="paper">
   <div class="company-top">
     <h1>${esc(COMPANY.name)}</h1>
@@ -239,6 +231,26 @@ export const openPrintWindow = (
 </div>
 </body></html>`;
 
+export const openPrintWindow = (
+  title: string,
+  body: string,
+  COMPANY: InvoicePrintCompany,
+  whatsapp?: WhatsAppShare
+): void => {
+  const waLink = whatsapp ? whatsappHref(whatsapp.mobile, whatsapp.message) : "";
+  const waButton = waLink
+    ? `<a class="btn-wa" href="${esc(waLink)}" target="_blank" rel="noopener">💬 WhatsApp</a>`
+    : "";
+  const previewBar = `<div class="preview-bar">
+  <div class="p-title">📄 ${esc(title)} — Preview</div>
+  <div class="p-btns">
+    ${waButton}
+    <button class="btn-print" onclick="window.print()">🖨️ Print Now</button>
+    <button class="btn-close" onclick="window.close()">✕ Close</button>
+  </div>
+</div>`;
+  const html = buildDocHtml(title, body, COMPANY, previewBar);
+
   const printWindow = window.open("", "_blank", "width=1050,height=850");
   if (!printWindow) {
     alert("Preview window block ho gaya. Browser pop-up allow karein.");
@@ -247,6 +259,138 @@ export const openPrintWindow = (
   printWindow.document.write(html);
   printWindow.document.close();
   printWindow.focus();
+};
+
+/** Doc HTML ko hidden iframe me render karke PNG aur/ya PDF file banata hai. */
+export async function renderDocToFiles(
+  title: string,
+  body: string,
+  COMPANY: InvoicePrintCompany,
+  opts: { png?: boolean; pdf?: boolean } = {}
+): Promise<{ png?: Blob; pdf?: Blob }> {
+  const iframe = document.createElement("iframe");
+  iframe.setAttribute("aria-hidden", "true");
+  iframe.style.position = "fixed";
+  iframe.style.left = "-10000px";
+  iframe.style.top = "0";
+  iframe.style.width = "820px";
+  iframe.style.height = "1200px";
+  iframe.style.border = "0";
+  document.body.appendChild(iframe);
+
+  try {
+    const idoc = iframe.contentDocument;
+    if (!idoc) throw new Error("render document not available");
+    idoc.open();
+    idoc.write(buildDocHtml(title, body, COMPANY));
+    idoc.close();
+
+    await new Promise((r) => setTimeout(r, 250));
+    const paper = idoc.querySelector(".paper") as HTMLElement | null;
+    if (!paper) throw new Error("render target missing");
+
+    await Promise.all(
+      Array.from(paper.querySelectorAll("img")).map(
+        (img) =>
+          new Promise<void>((res) => {
+            if (img.complete) return res();
+            img.onload = () => res();
+            img.onerror = () => res();
+          })
+      )
+    );
+
+    const width = paper.offsetWidth;
+    const height = paper.scrollHeight;
+    const dataUrl = await toPng(paper, {
+      pixelRatio: 2,
+      backgroundColor: "#ffffff",
+      width,
+      height,
+      skipFonts: true,
+    });
+
+    const result: { png?: Blob; pdf?: Blob } = {};
+    if (opts.png) result.png = await (await fetch(dataUrl)).blob();
+
+    if (opts.pdf) {
+      const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
+      const pageW = 210;
+      const pageH = 297;
+      const imgH = (height * pageW) / width;
+      let heightLeft = imgH;
+      let position = 0;
+      pdf.addImage(dataUrl, "PNG", 0, position, pageW, imgH);
+      heightLeft -= pageH;
+      while (heightLeft > 1) {
+        position = heightLeft - imgH;
+        pdf.addPage();
+        pdf.addImage(dataUrl, "PNG", 0, position, pageW, imgH);
+        heightLeft -= pageH;
+      }
+      result.pdf = pdf.output("blob");
+    }
+    return result;
+  } finally {
+    document.body.removeChild(iframe);
+  }
+}
+
+export type ShareResult = "shared" | "downloaded" | "cancelled" | "no-number";
+
+/**
+ * File ko WhatsApp par bhejo. Mobile/Web-Share support ho to file directly
+ * attach ho kar share sheet khulti hai; warna file download karke WhatsApp
+ * chat text ke saath kholta hai (user file manually attach kare).
+ */
+export async function shareFileToWhatsApp(p: {
+  mobile: unknown;
+  message: string;
+  filename: string;
+  blob: Blob;
+}): Promise<ShareResult> {
+  const file = new File([p.blob], p.filename, { type: p.blob.type || "application/octet-stream" });
+  const nav = navigator as Navigator & {
+    canShare?: (data: unknown) => boolean;
+    share?: (data: unknown) => Promise<void>;
+  };
+  if (nav.canShare && nav.share && nav.canShare({ files: [file] })) {
+    try {
+      await nav.share({ files: [file], text: p.message, title: p.filename });
+      return "shared";
+    } catch (err) {
+      if ((err as { name?: string })?.name === "AbortError") return "cancelled";
+    }
+  }
+  const url = URL.createObjectURL(p.blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = p.filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+  const href = whatsappHref(p.mobile, p.message);
+  if (!href) return "no-number";
+  window.open(href, "_blank", "noopener");
+  return "downloaded";
+}
+
+export const buildOutstandingWhatsAppMessage = (p: {
+  customerName: string;
+  outstanding: number;
+  companyName: string;
+  companyPhone: string;
+}): string => {
+  const inr = (v: number) =>
+    Number(v || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return (
+    `Dear ${p.customerName},\n` +
+    `Your pending outstanding with ${p.companyName} is Rs. ${inr(p.outstanding)}.\n` +
+    `Please find the attached outstanding statement for your reference.\n` +
+    `Kindly clear the due amount at your earliest.\n` +
+    `Regards, ${p.companyName} ${p.companyPhone}`
+  );
 };
 
 export const buildSalesInvoiceBody = async (params: {
