@@ -6,9 +6,20 @@ import {
   loadDbAllocations,
   type AllocBill,
 } from "../lib/billAllocations";
-import QRCode from "qrcode";
 import { SIGNATURE_DATA_URL } from "../lib/signatureData";
 import { currentFY, fyFromStartYear, fyOptions, fyStartYear } from "../lib/financialYear";
+import {
+  buildSalesInvoiceBody,
+  buildSalesInvoiceWhatsAppMessage,
+  COMPANY_PHONE,
+  dueDateFromTerm,
+  esc,
+  fmtDate,
+  money,
+  numToWords,
+  openPrintWindow as openDocWindow,
+  type WhatsAppShare,
+} from "../lib/salesInvoiceTemplate";
 
 type TabKey = "po" | "invoice" | "receipt" | "payment" | "ledger";
 
@@ -43,139 +54,8 @@ const COMPANY = {
   sales_terms: "",
 };
 
-const esc = (v: unknown): string =>
-  String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-
-const money = (v: unknown): string =>
-  `₹ ${Number(v || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-
-const fmtDate = (v: unknown): string => {
-  const s = String(v || "").slice(0, 10);
-  if (!s) return "-";
-  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (m) return `${m[3]}/${m[2]}/${m[1]}`;
-  return s;
-};
-
-const dueDateFromTerm = (invoiceDate: string, term: string): string => {
-  const d = new Date(invoiceDate + "T00:00:00");
-  if (isNaN(d.getTime())) return invoiceDate;
-  const days = String(term || "").match(/(\d+)\s*Days/i);
-  if (days) {
-    d.setDate(d.getDate() + Number(days[1]));
-  } else if (/10\s*(th|st)?\s*(of)?\s*(every\s+)?next\s*month/i.test(String(term || ""))) {
-    d.setMonth(d.getMonth() + 1, 10);
-  }
-  return d.toISOString().slice(0, 10);
-};
-
-const numToWords = (num: number): string => {
-  const a = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
-  const b = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
-  if (num === 0) return "Zero";
-  const two = (n: number): string => (n < 20 ? a[n] : b[Math.floor(n / 10)] + (n % 10 ? " " + a[n % 10] : ""));
-  const three = (n: number): string => {
-    const h = Math.floor(n / 100);
-    const r = n % 100;
-    return (h ? a[h] + " Hundred" + (r ? " " : "") : "") + (r ? two(r) : "");
-  };
-  let str = "";
-  const cr = Math.floor(num / 10000000);
-  const lk = Math.floor((num % 10000000) / 100000);
-  const th = Math.floor((num % 100000) / 1000);
-  const re = Math.floor(num % 1000);
-  if (cr) str += three(cr) + " Crore ";
-  if (lk) str += three(lk) + " Lakh ";
-  if (th) str += three(th) + " Thousand ";
-  if (re) str += three(re);
-  return str.trim();
-};
-
-const openPrintWindow = (title: string, body: string) => {
-  const html = `<!doctype html><html><head><meta charset="utf-8"/><title>${esc(title)}</title>
-<style>
-  * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  @page { size: A4; margin: 5mm 5mm; }
-  html { margin: 0; padding: 0; }
-  body { font-family: 'Segoe UI', Arial, sans-serif; color: #172033; margin: 0; padding: 0; background: #f1f5f9; }
-  .preview-bar { position: sticky; top: 0; z-index: 100; max-width: 820px; margin: 0 auto 14px; display: flex; align-items: center; justify-content: space-between; gap: 12px; background: #0f172a; color: #fff; padding: 12px 18px; border-radius: 10px; box-shadow: 0 6px 18px rgba(15,23,42,0.25); }
-  .preview-bar .p-title { font-size: 14px; font-weight: 800; letter-spacing: 0.5px; }
-  .preview-bar .p-btns { display: flex; gap: 8px; }
-  .preview-bar button { border: none; border-radius: 8px; padding: 9px 18px; font-size: 13px; font-weight: 700; cursor: pointer; }
-  .preview-bar .btn-print { background: #f59e0b; color: #0f172a; }
-  .preview-bar .btn-close { background: #374151; color: #e5e7eb; }
-  .paper { width: 210mm; min-height: 297mm; margin: 0 auto; background: #fff; padding: 10mm 12mm; border: 1px solid #e2e8f0; box-shadow: 0 4px 24px rgba(15,23,42,0.08); display: flex; flex-direction: column; }
-  .paper .signatures { margin-top: auto; }
-  @media print { body { background: #fff; padding: 0; width: 200mm; } .preview-bar { display: none !important; } .paper { width: 200mm; min-height: 287mm; overflow: visible; border: none; box-shadow: none; padding: 0; margin: 0; } body { font-size: 12px; } .paper table { font-size: 11.5px; margin: 4px 0; } .paper td, .paper th { padding: 4px 6px; line-height: 1.35; } .paper table.inv-items td { padding: 8px 6px; line-height: 1.5; font-size: 12px; } .paper .company-top { padding-bottom: 6px; margin-bottom: 6px; } .paper .company-top h1 { font-size: 20px; } .paper .company-top p { font-size: 10px; margin-top: 2px; } .paper .doc-title { font-size: 16px; margin: 8px 0 2px; } .paper .doc-band { margin-bottom: 6px; } .paper .meta-grid { margin-bottom: 8px; } .paper .party-box, .paper .info-box { padding: 8px 10px; } .paper .party-box .name { font-size: 13px; } .paper .amount-words { margin: 4px 0; padding: 6px 10px; font-size: 11px; } .paper .pay-table { margin: 4px 0; } .paper .pay-table td { padding: 3px 6px; } .paper .terms-box { font-size: 10px; padding: 6px 10px; margin: 4px 0 0; line-height: 1.4; } .paper .terms-box ol li { margin-bottom: 1px; } .paper .signatures { margin-top: auto; } .paper .signature .line { width: 130px; min-height: 20px; } }
-  thead { display: table-header-group; }
-  tr { page-break-inside: avoid; }
-  table, table tbody { page-break-inside: auto; }
-  .company-top { text-align: center; border-bottom: 3px double #0f172a; padding-bottom: 14px; margin-bottom: 16px; }
-  .company-top h1 { margin: 0; font-size: 26px; letter-spacing: 2px; color: #0f172a; font-weight: 900; }
-  .company-top p { margin: 4px 0 0; font-size: 12px; color: #475569; letter-spacing: 0.5px; }
-  .doc-title { text-align: center; margin: 12px 0 4px; font-size: 20px; letter-spacing: 4px; font-weight: 800; color: #1e293b; }
-  .doc-band { text-align: center; font-size: 11px; color: #64748b; margin-bottom: 18px; letter-spacing: 1px; }
-  .meta-grid { display: flex; justify-content: space-between; gap: 18px; margin-bottom: 18px; }
-  .party-box { border: 1px solid #cbd5e1; border-radius: 8px; padding: 12px 14px; flex: 1; background: #fff; }
-  .party-box .lbl { font-size: 10px; text-transform: uppercase; letter-spacing: 1.2px; color: #94a3b8; font-weight: 700; }
-  .party-box .name { font-size: 16px; font-weight: 800; color: #0f172a; margin-top: 3px; }
-  .party-box div { font-size: 12px; color: #334155; margin-top: 2px; word-wrap: break-word; overflow-wrap: break-word; }
-  .party-box .addr { white-space: normal; line-height: 1.5; word-wrap: break-word; overflow-wrap: break-word; }
-  .info-box { border: 1px solid #cbd5e1; border-radius: 8px; padding: 12px 14px; min-width: 250px; background: #fff; }
-  .info-row { display: flex; justify-content: space-between; font-size: 12px; padding: 3px 0; }
-  .info-row b { color: #0f172a; }
-  table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 12.5px; }
-  table.inv-items td { padding: 9px 10px; line-height: 1.5; font-size: 12.5px; }
-  th { background: #f8fafc; color: #334155; padding: 9px 10px; text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; }
-  th.r, td.r { text-align: right; }
-  th.c, td.c { text-align: center; }
-  td { border: 1px solid #d8dee9; padding: 8px 10px; color: #1e293b; }
-  .tot-row td { background: #f8fafc; font-weight: 800; font-size: 13px; }
-  .tot-row .grand td { background: #f8fafc; color: #0f172a; font-weight: 900; font-size: 14px; }
-  .amount-words { font-size: 12px; color: #334155; margin: 10px 0; padding: 10px 12px; background: #fff; border-left: 4px solid #94a3b8; border-radius: 4px; }
-  .notes { font-size: 11px; color: #64748b; margin: 14px 0; }
-  .signatures { display: flex; justify-content: space-between; margin-top: 42px; }
-  .signature { text-align: center; font-size: 12px; color: #475569; display: flex; flex-direction: column; align-items: center; }
-  .signature .line { border-top: 1.5px solid #64748b; width: 180px; margin: auto 0 0; padding-top: 6px; font-weight: 700; color: #0f172a; min-height: 26px; }
-  .signature .sig-img { max-width: 130px; height: auto; display: block; margin: 0 0 10px; }
-  .signature .s-label { font-size: 10px; font-weight: 500; color: #475569; margin-top: 2px; }
-  .footer { margin-top: 26px; padding-top: 12px; border-top: 1px solid #e2e8f0; text-align: center; font-size: 10px; color: #94a3b8; letter-spacing: 1px; }
-  .badge { display: inline-block; background: #f8fafc; color: #475569; font-size: 10px; font-weight: 800; padding: 2px 10px; border-radius: 99px; letter-spacing: 1px; border: 1px solid #e2e8f0; }
-  .pay-table { margin: 12px 0 4px; }
-  .pay-table td { border: 1px solid #d8dee9; padding: 7px 10px; font-size: 11.5px; }
-  .terms-box { margin: 12px 0 0; padding: 10px 12px; border: 1px dashed #cbd5e1; border-radius: 8px; background: #fff; font-size: 11px; color: #475569; line-height: 1.6; }
-  .terms-box ol li { margin-bottom: 3px; }
-  .inv-summary { display: flex; justify-content: flex-end; margin: 10px 0; font-size: 13px; }
-  .inv-summary .sum-box { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 18px; font-weight: 800; color: #0f172a; }
-</style></head><body>
-<div class="preview-bar">
-  <div class="p-title">📄 ${esc(title)} — Preview</div>
-  <div class="p-btns">
-    <button class="btn-print" onclick="window.print()">🖨️ Print Now</button>
-    <button class="btn-close" onclick="window.close()">✕ Close</button>
-  </div>
-</div>
-<div class="paper">
-  <div class="company-top">
-    <h1>${esc(COMPANY.name)}</h1>
-    <p>${esc(COMPANY.tagline)}</p>
-    <p style="margin-top:4px;font-size:11px;color:#64748b">${esc(COMPANY.address)}</p>
-    <p style="margin-top:4px;font-size:11px;color:#64748b">${[COMPANY.phone ? "Ph: " + esc(COMPANY.phone) : "", COMPANY.email ? "Email: " + esc(COMPANY.email) : "", COMPANY.website ? "Web: " + esc(COMPANY.website) : "", COMPANY.gstin ? "GSTIN: " + esc(COMPANY.gstin) : "", COMPANY.pan ? "PAN: " + esc(COMPANY.pan) : ""].filter(Boolean).join(" &nbsp;|&nbsp; ")}</p>
-  </div>
-  ${body}
-  <div class="footer">This is a computer generated document &nbsp;•&nbsp; Generated on ${esc(new Date().toLocaleString("en-IN"))} &nbsp;•&nbsp; Thank you for your business</div>
-</div>
-</body></html>`;
-
-  const printWindow = window.open("", "_blank", "width=1050,height=850");
-  if (!printWindow) {
-    alert("Preview window block ho gaya. Browser pop-up allow karein.");
-    return;
-  }
-  printWindow.document.write(html);
-  printWindow.document.close();
-  printWindow.focus();
-};
+const openDoc = (title: string, body: string, wa?: WhatsAppShare) =>
+  openDocWindow(title, body, COMPANY, wa);
 
 function PrintCenter() {
   const [activeTab, setActiveTab] = useState<TabKey>("po");
@@ -419,96 +299,34 @@ function PrintCenter() {
   </div>`;
   };
 
-  const printBodyForInvoice = async (inv: any) => {
+  // Sales Invoice ko Print Center wale format me kholo + WhatsApp share button.
+  const printInvoiceDoc = async (inv: any) => {
     const customer = customers.find((cc) => String(cc.id) === String(inv.customer_id));
     const items = invoiceItems.filter((it) => String(it.invoice_id) === String(inv.id));
     const total = items.length
       ? items.reduce((s, it) => s + (Number(it.total) || Number(it.quantity || 0) * Number(it.rate || 0)), 0)
       : Number(inv.total_amount) || 0;
-    let qrDataUrl = "";
-    if (COMPANY.upi_id) {
-      const upiLink = `upi://pay?pa=${encodeURIComponent(COMPANY.upi_id)}&pn=${encodeURIComponent(COMPANY.bank_account_holder || COMPANY.name)}&am=${total.toFixed(2)}&cu=INR`;
-      try {
-        qrDataUrl = await QRCode.toDataURL(upiLink, { width: 216, margin: 1, color: { dark: "#0f172a", light: "#ffffff" } });
-      } catch {
-        qrDataUrl = "";
-      }
-    }
-    const itemRows = items.length
-      ? items.map((it: any, i: number) => `<tr>
-          <td class="c">${i + 1}</td>
-          <td>${esc(it.item_name || "-")}</td>
-          <td class="c">${Number(it.quantity || 0)}</td>
-          <td class="r">${money(Number(it.rate || 0))}</td>
-          <td class="r">${money(Number(it.total) || Number(it.quantity || 0) * Number(it.rate || 0))}</td>
-        </tr>`).join("")
-      : `<tr>
-          <td class="c">1</td>
-          <td>Module Service & Spare Parts</td>
-          <td class="c">1</td>
-          <td class="r">${money(total)}</td>
-          <td class="r">${money(total)}</td>
-        </tr>`;
     const invReceipts = receipts.filter((rc) =>
       (rc.customerRefs || []).some((r: any) => String(r.id) === String(inv.id))
     );
     const receivedForInv = invReceipts.reduce((s, rc) => s + Number(rc.payment_in ?? rc.credit_amount ?? 0), 0);
-    const invStatus = receivedForInv >= total && total > 0 ? "Paid" : "Pending";
+    const body = await buildSalesInvoiceBody({ invoice: inv, customer, items, receivedAmount: receivedForInv, COMPANY });
+    const outstanding = invoices
+      .filter((iv: any) => String(iv.customer_id) === String(inv.customer_id))
+      .reduce((s, iv: any) => s + Number(iv.pending_amount || 0), 0);
     const payTerm = customer?.payment_term || "Cash";
     const dueDate = dueDateFromTerm(String(inv.invoice_date || ""), payTerm);
-    const salesTerms = COMPANY.sales_terms ? COMPANY.sales_terms.split(/\n+/).map((t) => `<li>${esc(t.trim())}</li>`).join("") : "";
-    const terms = COMPANY.sales_terms
-      ? `<ol style="margin:4px 0 0 16px;padding:0">${salesTerms}</ol>`
-      : `<ol style="margin:4px 0 0 16px;padding:0">
-  <li>3-month standard module service warranty (labor only). Any replacement parts will incur material charges. Condition: Warranty applies only if a new upper cord is installed.</li>
-  <li>Premium Service Includes 1 Year Warranty. All Upper Cords And Iron Hooks Are Replaced With New Parts During Service.</li>
-  <li>Warranty Does Not Cover Physical Damage, Water Damage, Power Surges, Mishandling.</li>
-  <li>This is a non-GST invoice. Goods once sold will not take back. MSME/Udyam Registration No. ${esc(COMPANY.udyam_number)}</li>
-</ol>`;
-    return `
-  <div class="doc-title">INVOICE</div>
-  <div class="doc-band">${esc(String(inv.invoice_no || ""))} &nbsp;•&nbsp; ${esc(fmtDate(inv.invoice_date))}</div>
-  <div class="meta-grid">
-    <div class="party-box">
-      <div class="lbl">Billed To</div>
-      <div class="name">${esc(customer?.business_name || customer?.customer_name || "Walk-in Customer")}</div>
-      <div>${customer?.business_address || customer?.address ? esc(customer.business_address || customer.address) : ""}</div>
-      <div>${customer?.mobile ? "Mobile: " + esc(customer.mobile) : ""}</div>
-      <div>${esc(payTerm) !== "Cash" ? "Payment Terms: " + esc(payTerm) : ""}</div>
-    </div>
-    <div class="info-box">
-      <div class="info-row"><span>Invoice No</span><b>${esc(inv.invoice_no || "-")}</b></div>
-      <div class="info-row"><span>Invoice Date</span><b>${esc(fmtDate(inv.invoice_date))}</b></div>
-      <div class="info-row"><span>Payment Status</span><b style="color:${invStatus === "Paid" ? "#15803d" : "#dc2626"}">${esc(invStatus)}</b></div>
-      <div class="info-row"><span>Due Date</span><b>${/10\s*(th|st)?\s*(of)?\s*(every\s+)?next\s*month/i.test(payTerm) ? "Date 10th Of Next Month" : esc(fmtDate(dueDate))}</b></div>
-      <div class="info-row"><span>Total Amount</span><b>${money(total)}</b></div>
-    </div>
-  </div>
-  <table class="inv-items">
-    <thead><tr><th class="c" style="width:44px">#</th><th>Item Description</th><th class="c" style="width:60px">Qty</th><th class="r" style="width:100px">Rate (₹)</th><th class="r" style="width:110px">Amount (₹)</th></tr></thead>
-    <tbody>${itemRows}</tbody>
-    <tr class="tot-row"><td colspan="4" style="text-align:right">Grand Total</td><td class="r">${money(total)}</td></tr>
-  </table>
-  <div class="amount-words"><b>Amount In Words:</b> ${numToWords(Math.round(total))} Rupees Only</div>
-  <table class="pay-table">
-    <tr class="tot-row"><td class="r" style="text-align:left;background:#f8fafc" colspan="5"><b>Payment Details — For ${esc(COMPANY.bank_account_holder || COMPANY.name)}</b></td></tr>
-    <tr><td>Account Name</td><td><b>${esc(COMPANY.bank_account_holder || COMPANY.name)}</b></td><td>Account No.</td><td><b>${esc(COMPANY.bank_account_number || "")}</b></td></tr>
-    <tr><td>Bank Name</td><td><b>${esc(COMPANY.bank_name || "")}</b></td><td>IFSC No.</td><td><b>${esc(COMPANY.bank_ifsc || "")}</b></td></tr>
-    <tr><td>G-Pay / UPI</td><td><b>${esc(COMPANY.upi_id || "")}</b></td><td></td><td></td></tr>
-  </table>
-  <div style="display:flex;gap:16px;align-items:stretch">
-    <div style="flex:1;display:flex">
-      <div class="terms-box" style="flex:1;display:flex;flex-direction:column;justify-content:center;margin:0"><b style="font-size:12px;margin-bottom:4px">Terms &amp; Conditions:</b>${terms}</div>
-    </div>
-    <div style="text-align:center;padding:12px 14px;border:1px solid #cbd5e1;border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;min-width:140px">
-      <img src="${qrDataUrl}" alt="Scan to Pay" style="width:110px;height:110px;border-radius:6px"/>
-      <div style="font-size:10px;margin-top:6px;color:#475569;font-weight:700">Scan to Pay</div>
-    </div>
-  </div>
-  <div class="signatures">
-    <div class="signature"><div class="line">Receiver's Signature</div></div>
-    <div class="signature"><img class="sig-img" src="${SIGNATURE_DATA_URL}" alt="s"/><div class="line">${esc(COMPANY.signature_name)}</div></div>
-  </div>`;
+    const message = buildSalesInvoiceWhatsAppMessage({
+      customerName: customer?.business_name || customer?.customer_name || "Customer",
+      invoiceNo: String(inv.invoice_no || ""),
+      invoiceDate: fmtDate(inv.invoice_date),
+      amount: total,
+      dueDate: /10\s*(th|st)?\s*(of)?\s*(every\s+)?next\s*month/i.test(payTerm) ? "Date 10th Of Next Month" : fmtDate(dueDate),
+      outstanding,
+      companyName: COMPANY.name,
+      companyPhone: COMPANY.phone || COMPANY_PHONE,
+    });
+    openDoc("Sales Invoice - " + (inv.invoice_no || ""), body, { mobile: customer?.mobile, message });
   };
 
   const printBodyForReceipt = (rc: any) => {
@@ -1091,11 +909,11 @@ function PrintCenter() {
   }, [activeTab]);
 
   const handlePrint = async () => {
-    if (activeTab === "po" && selectedPO) openPrintWindow("Purchase PO - " + (selectedPO.purchase_no || ""), printBodyForPO(selectedPO));
-    if (activeTab === "invoice" && selectedInvoice) openPrintWindow("Sales Invoice - " + (selectedInvoice.invoice_no || ""), await printBodyForInvoice(selectedInvoice));
-    if (activeTab === "receipt" && selectedReceipt) openPrintWindow("Payment Receipt", printBodyForReceipt(selectedReceipt));
-    if (activeTab === "payment" && selectedPayment) openPrintWindow("Payment Voucher", printBodyForPayment(selectedPayment));
-    if (activeTab === "ledger" && selectedCustomer) openPrintWindow("Customer Ledger - " + (selectedCustomer.business_name || selectedCustomer.customer_name || ""), printBodyForLedger(selectedCustomer));
+    if (activeTab === "po" && selectedPO) openDoc("Purchase PO - " + (selectedPO.purchase_no || ""), printBodyForPO(selectedPO));
+    if (activeTab === "invoice" && selectedInvoice) await printInvoiceDoc(selectedInvoice);
+    if (activeTab === "receipt" && selectedReceipt) openDoc("Payment Receipt", printBodyForReceipt(selectedReceipt));
+    if (activeTab === "payment" && selectedPayment) openDoc("Payment Voucher", printBodyForPayment(selectedPayment));
+    if (activeTab === "ledger" && selectedCustomer) openDoc("Customer Ledger - " + (selectedCustomer.business_name || selectedCustomer.customer_name || ""), printBodyForLedger(selectedCustomer));
   };
 
   // Build lists for the current tab: parties (left) + their records (right)
@@ -1244,19 +1062,19 @@ function PrintCenter() {
 
   const runQuickResult = async (r: any) => {
     setQuickQuery("");
-    if (r.type === "invoice") { setActiveTab("invoice"); setSelectedInvoice(r.payload); openPrintWindow("Sales Invoice - " + (r.payload.invoice_no || ""), await printBodyForInvoice(r.payload)); }
-    else if (r.type === "po") { setActiveTab("po"); setSelectedPO(purchases.find((p) => String(p.purchase_no || "") === String(r.payload.purchase_no || "")) || r.payload); openPrintWindow("Purchase PO - " + (r.payload.purchase_no || ""), printBodyForPO(r.payload)); }
-    else if (r.type === "receipt") { setActiveTab("receipt"); setSelectedReceipt(r.payload); openPrintWindow("Payment Receipt", printBodyForReceipt(r.payload)); }
-    else if (r.type === "payment") { setActiveTab("payment"); setSelectedPayment(r.payload); openPrintWindow("Payment Voucher", printBodyForPayment(r.payload)); }
-    else { setActiveTab("ledger"); setSelectedCustomer(r.payload); openPrintWindow("Customer Ledger - " + (r.payload.business_name || r.payload.customer_name || ""), printBodyForLedger(r.payload)); }
+    if (r.type === "invoice") { setActiveTab("invoice"); setSelectedInvoice(r.payload); await printInvoiceDoc(r.payload); }
+    else if (r.type === "po") { setActiveTab("po"); setSelectedPO(purchases.find((p) => String(p.purchase_no || "") === String(r.payload.purchase_no || "")) || r.payload); openDoc("Purchase PO - " + (r.payload.purchase_no || ""), printBodyForPO(r.payload)); }
+    else if (r.type === "receipt") { setActiveTab("receipt"); setSelectedReceipt(r.payload); openDoc("Payment Receipt", printBodyForReceipt(r.payload)); }
+    else if (r.type === "payment") { setActiveTab("payment"); setSelectedPayment(r.payload); openDoc("Payment Voucher", printBodyForPayment(r.payload)); }
+    else { setActiveTab("ledger"); setSelectedCustomer(r.payload); openDoc("Customer Ledger - " + (r.payload.business_name || r.payload.customer_name || ""), printBodyForLedger(r.payload)); }
   };
 
   const openRecord = async (r: any) => {
-    if (activeTab === "po") { setSelectedPO(r.payload); openPrintWindow("Purchase PO - " + (r.payload.purchase_no || ""), printBodyForPO(r.payload)); }
-    else if (activeTab === "invoice") { setSelectedInvoice(r.payload); openPrintWindow("Sales Invoice - " + (r.payload.invoice_no || ""), await printBodyForInvoice(r.payload)); }
-    else if (activeTab === "receipt") { setSelectedReceipt(r.payload); openPrintWindow("Payment Receipt", printBodyForReceipt(r.payload)); }
-    else if (activeTab === "payment") { setSelectedPayment(r.payload); openPrintWindow("Payment Voucher", printBodyForPayment(r.payload)); }
-    else if (activeTab === "ledger") { setSelectedCustomer(r.payload._ledgerName ? null : r.payload); const cust = r.payload._ledgerName ? invoices.find((iv) => String(iv.id) === String(r.key)) : r.payload; openPrintWindow("Customer Ledger" + (cust ? " - " + (r.payload._ledgerName || cust.business_name || cust.customer_name || "") : ""), printBodyForLedger(r.payload._ledgerName ? (customers.find((c) => String(c.id) === String(cust?.customer_id)) || cust) : r.payload)); }
+    if (activeTab === "po") { setSelectedPO(r.payload); openDoc("Purchase PO - " + (r.payload.purchase_no || ""), printBodyForPO(r.payload)); }
+    else if (activeTab === "invoice") { setSelectedInvoice(r.payload); await printInvoiceDoc(r.payload); }
+    else if (activeTab === "receipt") { setSelectedReceipt(r.payload); openDoc("Payment Receipt", printBodyForReceipt(r.payload)); }
+    else if (activeTab === "payment") { setSelectedPayment(r.payload); openDoc("Payment Voucher", printBodyForPayment(r.payload)); }
+    else if (activeTab === "ledger") { setSelectedCustomer(r.payload._ledgerName ? null : r.payload); const cust = r.payload._ledgerName ? invoices.find((iv) => String(iv.id) === String(r.key)) : r.payload; openDoc("Customer Ledger" + (cust ? " - " + (r.payload._ledgerName || cust.business_name || cust.customer_name || "") : ""), printBodyForLedger(r.payload._ledgerName ? (customers.find((c) => String(c.id) === String(cust?.customer_id)) || cust) : r.payload)); }
   };
 
   const renderBrowser = () => {
@@ -1341,7 +1159,7 @@ function PrintCenter() {
                   onClick={() => {
                     const cust = activeParty ? customers.find((c) => String(c.id) === String(activeParty.key)) || null : null;
                     const body = printBodyForLedgerYear(cust || activeParty, "complete");
-                    if (body) openPrintWindow("Customer Complete Ledger - " + ((cust || activeParty)?.business_name || (cust || activeParty)?.customer_name || activeParty?.name || ""), body);
+                    if (body) openDoc("Customer Complete Ledger - " + ((cust || activeParty)?.business_name || (cust || activeParty)?.customer_name || activeParty?.name || ""), body);
                   }}
                   disabled={allPartyActive}
                   style={{ background: allPartyActive ? "#cbd5e1" : "#0f766e", color: "#fff", border: "none", borderRadius: 9, padding: "9px 14px", fontWeight: 800, fontSize: 12, cursor: allPartyActive ? "not-allowed" : "pointer", opacity: allPartyActive ? 0.7 : 1 }}
@@ -1352,7 +1170,7 @@ function PrintCenter() {
                   onClick={() => {
                     const cust = activeParty ? customers.find((c) => String(c.id) === String(activeParty.key)) || null : null;
                     const body = printBodyForLedgerYear(cust || activeParty, "pending");
-                    if (body) openPrintWindow("Customer Pending Ledger - " + ((cust || activeParty)?.business_name || (cust || activeParty)?.customer_name || activeParty?.name || ""), body);
+                    if (body) openDoc("Customer Pending Ledger - " + ((cust || activeParty)?.business_name || (cust || activeParty)?.customer_name || activeParty?.name || ""), body);
                   }}
                   disabled={allPartyActive}
                   style={{ background: allPartyActive ? "#cbd5e1" : "#b91c1c", color: "#fff", border: "none", borderRadius: 9, padding: "9px 14px", fontWeight: 800, fontSize: 12, cursor: allPartyActive ? "not-allowed" : "pointer", opacity: allPartyActive ? 0.7 : 1 }}
@@ -1363,7 +1181,7 @@ function PrintCenter() {
                   <button
                     onClick={() => {
                       const body = printBodyForAllPartyPending();
-                      if (body) openPrintWindow("All Party Total Pending Report - " + ledgerFY, body);
+                      if (body) openDoc("All Party Total Pending Report - " + ledgerFY, body);
                     }}
                     style={{ background: "#7c3aed", color: "#fff", border: "none", borderRadius: 9, padding: "9px 14px", fontWeight: 800, fontSize: 12, cursor: "pointer" }}
                   >

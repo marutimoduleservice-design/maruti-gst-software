@@ -5,6 +5,17 @@ import { fmtDate } from "../lib/formatDate";
 import { SortTh, useSortedRows } from "../lib/tableSort";
 import HistoryPanel from "../components/HistoryPanel";
 import { enqueueOffline, isOffline } from "../lib/offlineQueue";
+import { buildAllocations, loadDbAllocations, type AllocBill } from "../lib/billAllocations";
+import {
+  buildSalesInvoiceBody,
+  buildSalesInvoiceWhatsAppMessage,
+  COMPANY_PHONE,
+  dueDateFromTerm,
+  makeDefaultCompany,
+  openPrintWindow,
+  openWhatsApp,
+  type InvoicePrintCompany,
+} from "../lib/salesInvoiceTemplate";
 
 type Invoice = {
   id: number;
@@ -100,8 +111,7 @@ const [invoicedQtyByJob, setInvoicedQtyByJob] = useState<Record<string, number>>
   const [saving, setSaving] = useState(false);
   const [editingInvoiceId, setEditingInvoiceId] = useState<number | null>(null);
 
-  const [printingInvoice, setPrintingInvoice] = useState<Invoice | null>(null);
-  const [printingItems, setPrintingItems] = useState<any[]>([]);
+  const [company, setCompany] = useState<InvoicePrintCompany>(() => makeDefaultCompany());
   const [historyInvoice, setHistoryInvoice] = useState<Invoice | null>(null);
 
   const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split("T")[0]);
@@ -137,13 +147,39 @@ const [invoicedQtyByJob, setInvoicedQtyByJob] = useState<Record<string, number>>
         sc("customers").select("*").order("business_name"),
         sc("job_cards").select("id, job_no, status, customer_id, repairing_quantity, warranty_quantity, reject_quantity").order("id", { ascending: false }),
         sc("invoice_items").select("invoice_id, inward_no, item_name, quantity"),
-        sc("customer_item_prices").select("*")
+        sc("customer_item_prices").select("*"),
+        sc("company_settings").select("*").limit(1)
       ]);
     } catch {
       setLoading(false);
       return;
     }
-    const [invRes, purchaseRes, itemRes, custRes, jobRes, invoiceItemsRes, priceRes] = results;
+    const [invRes, purchaseRes, itemRes, custRes, jobRes, invoiceItemsRes, priceRes, compRes] = results;
+
+    const compRow = compRes?.data?.[0];
+    if (compRow) {
+      setCompany((prev) => ({
+        ...prev,
+        name: compRow.business_name || prev.name,
+        tagline: compRow.tagline || prev.tagline,
+        address: compRow.business_address || prev.address,
+        phone: compRow.phone || "",
+        email: compRow.email || "",
+        gstin: compRow.gstin || "",
+        pan: compRow.pan || "",
+        state_code: compRow.state_code || prev.state_code,
+        udyam_number: compRow.udyam_number || prev.udyam_number,
+        bank_name: compRow.bank_name || "",
+        bank_account_holder: compRow.bank_account_holder || "",
+        bank_account_number: compRow.bank_account_number || "",
+        bank_ifsc: compRow.bank_ifsc || "",
+        upi_id: compRow.upi_id || "",
+        signature_name: compRow.signature_name || prev.signature_name,
+        website: compRow.website || "",
+        po_terms: compRow.po_terms || "",
+        sales_terms: compRow.sales_terms || "",
+      }));
+    }
 
     const customerRows = (custRes.data || []) as Customer[];
     const jobRows = (jobRes.data || []) as Omit<JobCard, "customers">[];
@@ -696,10 +732,69 @@ if (repStats.pending > 0) {
     }
   };
 
-  const handlePrintInvoice = async (inv: Invoice) => {
-    setPrintingInvoice(inv);
+  // Print + WhatsApp share ke liye invoice ka poora context (received + customer outstanding).
+  const buildInvoiceShareContext = async (inv: Invoice) => {
     const { data: itemsData } = await sc("invoice_items").select("*").eq("invoice_id", inv.id);
-    if (itemsData) setPrintingItems(itemsData);
+    const items = itemsData || [];
+    const { data: invoiceRows } = await sc("invoices").select("id, invoice_no, invoice_date, total_amount, customer_id");
+    const { data: bankRows } = await sc("bank_transactions").select("*").order("id", { ascending: true });
+    await loadDbAllocations(true);
+    const bills: AllocBill[] = (invoiceRows || []).map((iv: any) => ({
+      id: Number(iv.id),
+      ref: String(iv.invoice_no || ""),
+      date: String(iv.invoice_date || ""),
+      total: Number(iv.total_amount || 0),
+    }));
+    const receiptRows = (bankRows || []).filter((r: any) => !r.bounced_at);
+    const allocs = buildAllocations(bills, receiptRows);
+    const alloc = allocs.get(inv.id) || { paid: 0, deduction: 0 };
+    const received = alloc.paid + alloc.deduction;
+    const outstanding = (invoiceRows || [])
+      .filter((iv: any) => String(iv.customer_id) === String(inv.customer_id))
+      .reduce((s: number, iv: any) => {
+        const a = allocs.get(iv.id) || { paid: 0, deduction: 0 };
+        return s + Math.max(0, Number(iv.total_amount || 0) - a.paid - a.deduction);
+      }, 0);
+    const customer = (customers as any[]).find((c) => String(c.id) === String(inv.customer_id)) || inv.customers || null;
+    const total = items.length
+      ? items.reduce((s: number, it: any) => s + (Number(it.total) || Number(it.quantity || 0) * Number(it.rate || 0)), 0)
+      : Number(inv.total_amount) || 0;
+    const payTerm = customer?.payment_term || "Cash";
+    const dueDate = dueDateFromTerm(String(inv.invoice_date || ""), payTerm);
+    const dueDateLabel = /10\s*(th|st)?\s*(of)?\s*(every\s+)?next\s*month/i.test(payTerm)
+      ? "Date 10th Of Next Month"
+      : fmtDate(dueDate);
+    const message = buildSalesInvoiceWhatsAppMessage({
+      customerName: customer?.business_name || customer?.customer_name || "Customer",
+      invoiceNo: String(inv.invoice_no || ""),
+      invoiceDate: fmtDate(inv.invoice_date),
+      amount: total,
+      dueDate: dueDateLabel,
+      outstanding,
+      companyName: company.name,
+      companyPhone: company.phone || COMPANY_PHONE,
+    });
+    return { items, received, customer, total, message };
+  };
+
+  const handlePrintInvoice = async (inv: Invoice) => {
+    const ctx = await buildInvoiceShareContext(inv);
+    const body = await buildSalesInvoiceBody({
+      invoice: inv,
+      customer: ctx.customer,
+      items: ctx.items,
+      receivedAmount: ctx.received,
+      COMPANY: company,
+    });
+    openPrintWindow("Sales Invoice - " + (inv.invoice_no || ""), body, company, {
+      mobile: ctx.customer?.mobile,
+      message: ctx.message,
+    });
+  };
+
+  const handleWhatsAppInvoice = async (inv: Invoice) => {
+    const ctx = await buildInvoiceShareContext(inv);
+    openWhatsApp(ctx.customer?.mobile, ctx.message);
   };
 
 const handleDeleteInvoice = async (inv: Invoice) => {
@@ -915,60 +1010,6 @@ const handleDeleteInvoice = async (inv: Invoice) => {
 
   return (
     <div style={{ width: "100%", padding: 10 }}>
-      {printingInvoice && (
-        <div style={{ position: "fixed", top: 0, left: 0, width: "100%", height: "100%", background: "rgba(0,0,0,0.5)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 1000 }}>
-          <div style={{ background: "white", width: "700px", padding: "30px", borderRadius: "8px", position: "relative", maxHeight: "90vh", overflowY: "auto" }}>
-            <button onClick={() => setPrintingInvoice(null)} style={{ position: "absolute", top: 15, right: 15, background: "#dc2626", color: "white", border: "none", padding: "6px 12px", borderRadius: 4, cursor: "pointer" }}>Close ✕</button>
-            
-            <div style={{ textAlign: "center", borderBottom: "2px solid #333", paddingBottom: "15px", marginBottom: "20px" }}>
-              <h2 style={{ margin: 0, color: "#1e3a8a" }}>MARUTI MODULE SERVICE</h2>
-              <p style={{ margin: "5px 0", fontSize: 13, color: "#555" }}>Electronic Jacquard Module Service & Repairing Specialist</p>
-              <p style={{ margin: 0, fontSize: 12, color: "#777" }}>Surat, Gujarat</p>
-            </div>
-
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "20px", fontSize: 14 }}>
-              <div>
-                <strong>Business:</strong> {printingInvoice.customers?.business_name || printingInvoice.customers?.customer_name}<br/>
-                <strong>Mobile:</strong> {printingInvoice.customers?.mobile}<br/>
-                <strong>Address:</strong> {printingInvoice.customers?.address || "Surat"}
-              </div>
-              <div style={{ textAlign: "right" }}>
-                <strong>Invoice No:</strong> {printingInvoice.invoice_no}<br/>
-                <strong>Date:</strong> {fmtDate(printingInvoice.invoice_date)}<br/>
-                <strong>Job Ref:</strong> {printingInvoice.job_cards?.job_no || "Direct Sale"}
-              </div>
-            </div>
-
-            <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: "20px", fontSize: 13 }}>
-              <thead>
-                <tr style={{ background: "#f1f5f9" }}>
-                  <th style={{ border: "1px solid #cbd5e1", padding: 8, textAlign: "left" }}>Item / Description</th>
-                  <th style={{ border: "1px solid #cbd5e1", padding: 8, textAlign: "center", width: 60 }}>Qty</th>
-                  <th style={{ border: "1px solid #cbd5e1", padding: 8, textAlign: "right", width: 100 }}>Rate (₹)</th>
-                  <th style={{ border: "1px solid #cbd5e1", padding: 8, textAlign: "right", width: 100 }}>Total (₹)</th>
-                </tr>
-              </thead>
-              <tbody>
-                {printingItems.map((pi, idx) => (
-                  <tr key={idx}>
-                    <td style={{ border: "1px solid #cbd5e1", padding: 8 }}>{pi.item_name}</td>
-                    <td style={{ border: "1px solid #cbd5e1", padding: 8, textAlign: "center" }}>{pi.quantity}</td>
-                    <td style={{ border: "1px solid #cbd5e1", padding: 8, textAlign: "right" }}>₹ {pi.rate}</td>
-                    <td style={{ border: "1px solid #cbd5e1", padding: 8, textAlign: "right" }}>₹ {pi.total}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-
-            <div style={{ textAlign: "right", fontSize: 16, marginBottom: "30px" }}>
-              <strong>Grand Total: ₹ {printingInvoice.total_amount}</strong>
-            </div>
-
-            <button onClick={() => window.print()} style={{ background: "#2563eb", color: "white", border: "none", padding: "10px 20px", borderRadius: 4, cursor: "pointer", fontWeight: "bold" }}>🖨️ Print Invoice</button>
-          </div>
-        </div>
-      )}
-
       {historyInvoice && (
         <div
           onMouseDown={(e) => { if (e.target === e.currentTarget) setHistoryInvoice(null); }}
@@ -1222,6 +1263,12 @@ const handleDeleteInvoice = async (inv: Invoice) => {
                         style={{ background: "#16a34a", color: "white", border: "none", padding: "6px 10px", borderRadius: "4px", cursor: "pointer", fontWeight: "bold" }}
                       >
                         🖨️ Print
+                      </button>
+                      <button 
+                        onClick={() => handleWhatsAppInvoice(inv)} 
+                        style={{ background: "#25D366", color: "white", border: "none", padding: "6px 10px", borderRadius: "4px", cursor: "pointer", fontWeight: "bold" }}
+                      >
+                        💬 WhatsApp
                       </button>
                       <button 
                         onClick={() => setHistoryInvoice(inv)} 
