@@ -138,6 +138,67 @@ export const parseAllocations = (
   return allocations;
 };
 
+/**
+ * Purane vouchers me discount sirf global `[Disc: ₹X]` ke roop me likha gaya tha
+ * (per-bill tag ke bina), isliye wo oldest bill par chala jaata tha. Jab user ne
+ * wo discount kisi ek bill par jaan-boojhkar lagaya tha, to ye detect karta hai
+ * ki disc kis bill ko exactly clear karta hai (remaining == disc) aur kahan
+ * galat pada hai. Ye ek suggestion hai — UI confirm karne ke baad move karta hai.
+ */
+export type DiscountMove = {
+  txnId: number;
+  kind: "invoice" | "purchase";
+  disc: number;
+  fromRef: string | null;
+  toRef: string;
+};
+
+export const findDiscountMoves = (
+  kind: "invoice" | "purchase",
+  bills: AllocBill[],
+  rows: any[]
+): DiscountMove[] => {
+  const moves: DiscountMove[] = [];
+  const accum = new Map<number, BillAllocation>();
+  const ordered = [...rows].sort((a, b) => Number(a.id || 0) - Number(b.id || 0));
+  for (const row of ordered) {
+    applyAllocations(accum, bills, [row]);
+    const particulars = String(row.particulars || "");
+    const disc = Number(particulars.match(/\[Disc:\s*₹?([\d.]+)\]/i)?.[1] || 0);
+    if (!(disc > 0.005)) continue;
+
+    const referenced = bills.filter((b) => b.ref && particulars.includes(b.ref));
+    if (referenced.length < 2) continue;
+
+    let fromBook: AllocBill | null = null;
+    const candidates: AllocBill[] = [];
+    for (const b of referenced) {
+      const a = accum.get(b.id) || { paid: 0, deduction: 0 };
+      const remaining = Number(b.total || 0) - a.paid - a.deduction;
+      if (a.deduction > 0.005) fromBook = b;
+      if (remaining > 0.005 && Math.abs(remaining - disc) < 0.01) candidates.push(b);
+    }
+
+    const to = candidates.find((c) => !fromBook || c.id !== fromBook.id);
+    if (!to) continue;
+    if (fromBook && fromBook.id === to.id) continue;
+
+    const already = new RegExp(
+      `${escapeRegExp(to.ref)}:\\s*[\\d.]+[^,)]*?Disc:\\s*[\\d.]+`
+    ).test(particulars);
+    if (already) continue;
+
+    moves.push({
+      txnId: Number(row.id),
+      kind,
+      disc,
+      fromRef: fromBook ? fromBook.ref : null,
+      toRef: to.ref,
+    });
+  }
+  return moves;
+};
+
 // ── payment_allocations table cache ──────────────────────────────────────────
 let dbAllocCache: AllocCache = null;
 let dbAllocLoaded = false;

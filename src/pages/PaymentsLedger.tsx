@@ -7,6 +7,7 @@ import {
   buildAllocations,
   deleteVoucherAllocations,
   escapeRegExp,
+  findDiscountMoves,
   getDbAllocations,
   isReceiptRow,
   isVendorPaymentRow,
@@ -112,6 +113,17 @@ const formatBillRefs = (
     })
     .join(", ");
   return { hasExplicit, hasDisc, refs };
+};
+
+// Repair helper: voucher text me us bill ke ref ke aage per-bill discount tag
+// jodta hai ("REF:500.00" -> "REF:500.00 Disc: 18.00"). Tag pehle se ho to text
+// waisa hi rehta hai (double-add nahi hota).
+const addPerBillDisc = (text: string, ref: string, disc: number) => {
+  const re = new RegExp(`(${escapeRegExp(ref)}(?::\\s*[\\d.]+)?)(\\s*Disc:\\s*[\\d.]+)?`);
+  const m = text.match(re);
+  if (!m) return text;
+  if (m[2]) return text;
+  return text.replace(re, `$1 Disc: ${disc.toFixed(2)}`);
 };
 
 // A voucher row can carry per-bill amounts ("INV-01: 500, INV-02: 300") or only a
@@ -824,6 +836,84 @@ function PaymentsLedger() {
     setTimeout(() => printWindow.print(), 300);
   };
 
+  // ── ONE-TIME REPAIR: purane global-discount vouchers ─────────────────────────
+  // Jin vouchers me discount sirf global `[Disc: ₹X]` tha, wo oldest bill par
+  // chala gaya. Har aise voucher me detect karte hain ki disc kis bill ko exactly
+  // clear karta hai, us bill ke ref par per-bill `Disc:` tag likh dete hain, aur
+  // allocation rows cumulative dobara bana dete hain (wahi tested pipeline jo
+  // voucher edit karta hai).
+  const repairDiscountSplits = async () => {
+    if (savingEntry) return;
+    const invBills: AllocBill[] = invoices.map((i) => ({
+      id: Number(i.id),
+      ref: String(i.invoice_no || ""),
+      date: String(i.invoice_date || ""),
+      total: Number(i.total_amount || 0),
+    }));
+    const purBills: AllocBill[] = purchases.map((p) => ({
+      id: Number(p.id),
+      ref: String(p.inward_no || p.purchase_no || `INW-${p.id}`),
+      date: String(p.purchase_date || ""),
+      total: Number(p.total_amount || 0),
+    }));
+    const receipts = bankRows.filter(isReceiptRow);
+    const payments = bankRows.filter(isVendorPaymentRow);
+    const moves = [
+      ...findDiscountMoves("invoice", invBills, receipts),
+      ...findDiscountMoves("purchase", purBills, payments),
+    ];
+    if (moves.length === 0) {
+      alert("✅ Sabhi discount allocations sahi hain — theek karne ki zaroorat nahi.");
+      return;
+    }
+    const summary = moves
+      .map((m) => `• ${m.fromRef ? `${m.fromRef} se` : ""} ${m.toRef} par ₹${m.disc}`)
+      .join("\n");
+    if (
+      !confirm(
+        `Purane ${moves.length} voucher ka discount sahi bill par lagayein?\n\n${summary}\n\nConfirm karne par voucher text + allocation rows update honge. Baaki sab figures wahi rahenge.`
+      )
+    ) {
+      return;
+    }
+    setSavingEntry(true);
+    try {
+      for (const kind of ["invoice", "purchase"] as const) {
+        const kindMoves = moves.filter((m) => m.kind === kind);
+        if (!kindMoves.length) continue;
+        const bills = kind === "invoice" ? invBills : purBills;
+        const rows = kind === "invoice" ? receipts : payments;
+        let changed = false;
+        for (const m of kindMoves) {
+          const row = rows.find((r: any) => Number(r.id) === m.txnId);
+          if (!row) continue;
+          const updated = addPerBillDisc(String(row.particulars || ""), m.toRef, m.disc);
+          if (updated === row.particulars) continue;
+          const { error } = await sc("bank_transactions")
+            .update({ particulars: updated })
+            .eq("id", m.txnId);
+          if (error) throw error;
+          row.particulars = updated;
+          changed = true;
+        }
+        if (!changed) continue;
+        const idxs = kindMoves
+          .map((m) => rows.findIndex((r: any) => Number(r.id) === m.txnId))
+          .filter((i) => i >= 0);
+        const startIdx = Math.min(...idxs);
+        const replaceIds = rows.slice(startIdx).map((r: any) => Number(r.id));
+        await saveVoucherAllocations(kind, bills, rows, startIdx, replaceIds);
+      }
+      await loadData();
+      alert("✅ Discount allocation theek ho gaya! Ab discount sahi bill par lagega.");
+    } catch (err: any) {
+      console.error("Discount repair error:", err);
+      alert("❌ Repair fail: " + (err?.message || err));
+    } finally {
+      setSavingEntry(false);
+    }
+  };
+
   const handleSaveEntry = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -1399,6 +1489,24 @@ function PaymentsLedger() {
             }}
           >
             ⚠️ Bounce List{bouncedVouchers.length > 0 ? ` (${bouncedVouchers.length})` : ""}
+          </button>
+
+          <button
+            onClick={repairDiscountSplits}
+            disabled={savingEntry}
+            title="Purane vouchers me galti se oldest bill par pade discount ko sahi bill par lagata hai"
+            style={{
+              background: "#fffbeb",
+              color: "#b45309",
+              border: "2px solid #fcd34d",
+              padding: "8px 12px",
+              borderRadius: 8,
+              fontWeight: 700,
+              fontSize: 12,
+              cursor: savingEntry ? "wait" : "pointer",
+            }}
+          >
+            🛠 Fix Old Discounts
           </button>
 
           <button
