@@ -1,5 +1,5 @@
 import { sc } from "../lib/company";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { fmtDate } from "../lib/formatDate";
 import { SortTh, useSortedRows } from "../lib/tableSort";
 
@@ -191,6 +191,16 @@ function JobCards({ technicianScopeId }: { technicianScopeId?: number | null } =
   const [viewImage, setViewImage] =
     useState<string | null>(null);
 
+  // Module photo ko mobile camera se live kheenchne ke liye.
+  const [cameraOn, setCameraOn] =
+    useState(false);
+  const [cameraError, setCameraError] =
+    useState("");
+  const videoRef =
+    useRef<HTMLVideoElement | null>(null);
+  const streamRef =
+    useRef<MediaStream | null>(null);
+
   const [form, setForm] =
     useState<FormState>(initialForm());
 
@@ -360,6 +370,7 @@ function JobCards({ technicianScopeId }: { technicianScopeId?: number | null } =
   const totalReceived =
     repairingQty +
     warrantyQty +
+    warrantyOkQty +
     rejectQty;
 
   // =====================================================
@@ -561,6 +572,132 @@ function JobCards({ technicianScopeId }: { technicianScopeId?: number | null } =
   };
 
   // =====================================================
+  // MODULE PHOTO — LIVE CAMERA
+  // =====================================================
+
+  // Mobile/desktop ka camera kholta hai (peeche wala camera prefer).
+  const openCamera = async () => {
+    setCameraError("");
+
+    if (
+      !navigator.mediaDevices ||
+      !navigator.mediaDevices.getUserMedia
+    ) {
+      alert(
+        "Is browser me camera support nahi hai. Gallery se photo chunein."
+      );
+
+      return;
+    }
+
+    try {
+      const stream =
+        await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: {
+              ideal: "environment",
+            },
+          },
+          audio: false,
+        });
+
+      streamRef.current = stream;
+      setCameraOn(true);
+    } catch (error) {
+      console.error(error);
+      alert(
+        "Camera open nahi hua. Permission allow karein ya Gallery se photo chunein."
+      );
+    }
+  };
+
+  const stopCamera = () => {
+    streamRef.current
+      ?.getTracks()
+      .forEach((track) => track.stop());
+
+    streamRef.current = null;
+    setCameraOn(false);
+  };
+
+  const capturePhoto = () => {
+    const video = videoRef.current;
+
+    if (!video || !video.videoWidth) {
+      setCameraError(
+        "Camera ready nahi hai, ek second ruk kar dobara try karein."
+      );
+
+      return;
+    }
+
+    const canvas =
+      document.createElement("canvas");
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    const context = canvas.getContext("2d");
+
+    if (!context) return;
+
+    context.drawImage(
+      video,
+      0,
+      0,
+      canvas.width,
+      canvas.height
+    );
+
+    updateForm(
+      "module_image_url",
+      canvas.toDataURL("image/jpeg", 0.85)
+    );
+
+    stopCamera();
+  };
+
+  useEffect(() => {
+    if (
+      cameraOn &&
+      videoRef.current &&
+      streamRef.current
+    ) {
+      videoRef.current.srcObject =
+        streamRef.current;
+
+      const playPromise =
+        videoRef.current.play();
+
+      if (playPromise) {
+        playPromise.catch(() => {
+          /* autoplay block hua to user phir bhi Capture dabaye */
+        });
+      }
+    }
+  }, [cameraOn]);
+
+  // Form band ho ya component unmount ho to camera stream band ho jaye.
+  useEffect(() => {
+    if (showForm) return;
+
+    streamRef.current
+      ?.getTracks()
+      .forEach((track) => track.stop());
+
+    streamRef.current = null;
+    setCameraOn(false);
+  }, [showForm]);
+
+  useEffect(() => {
+    return () => {
+      streamRef.current
+        ?.getTracks()
+        .forEach((track) => track.stop());
+    };
+  }, []);
+
+  // =====================================================
   // SAVE JOB CARD
   // =====================================================
 
@@ -609,14 +746,6 @@ function JobCards({ technicianScopeId }: { technicianScopeId?: number | null } =
     ) {
       alert(
         "Quantity negative nahi ho sakti."
-      );
-
-      return;
-    }
-
-    if (warrantyOkQty > warrantyQty) {
-      alert(
-        "Warranty OK quantity Warranty quantity se zyada nahi ho sakti."
       );
 
       return;
@@ -2092,7 +2221,7 @@ function JobCards({ technicianScopeId }: { technicianScopeId?: number | null } =
                     display:
                       "grid",
                     gridTemplateColumns:
-                      "repeat(3,1fr)",
+                      "repeat(auto-fit, minmax(150px, 1fr))",
                     gap: 14,
                   }}
                 >
@@ -2123,6 +2252,19 @@ function JobCards({ technicianScopeId }: { technicianScopeId?: number | null } =
                   />
 
                   <QuantityField
+                    label="Warranty OK Qty"
+                    value={
+                      form.warranty_ok_quantity
+                    }
+                    onChange={(value) =>
+                      updateForm(
+                        "warranty_ok_quantity",
+                        value
+                      )
+                    }
+                  />
+
+                  <QuantityField
                     label="Reject Qty"
                     value={
                       form.reject_quantity
@@ -2134,90 +2276,6 @@ function JobCards({ technicianScopeId }: { technicianScopeId?: number | null } =
                       )
                     }
                   />
-                </div>
-
-                {/* WARRANTY OK */}
-
-                <div
-                  style={{
-                    marginTop: 14,
-                    padding:
-                      "14px 16px",
-                    borderRadius:
-                      10,
-                    background:
-                      "#ecfeff",
-                    border:
-                      "1px solid #a5f3fc",
-                    display:
-                      "flex",
-                    gap: 16,
-                    alignItems:
-                      "center",
-                    justifyContent:
-                      "space-between",
-                    flexWrap:
-                      "wrap",
-                  }}
-                >
-                  <div
-                    style={{
-                      flex:
-                        "1 1 240px",
-                    }}
-                  >
-                    <div
-                      style={{
-                        color:
-                          "#0e7490",
-                        fontSize: 13,
-                        fontWeight:
-                          800,
-                      }}
-                    >
-                      Warranty OK Qty
-                    </div>
-
-                    <div
-                      style={{
-                        color:
-                          "#0891b2",
-                        fontSize: 12,
-                        marginTop: 2,
-                        lineHeight:
-                          1.4,
-                      }}
-                    >
-                      Warranty me aaye modules me se check karne par kitne OK mile (kharab nahi). Net Profit ka Warranty % sirf faulty modules ginega.
-                    </div>
-                  </div>
-
-                  <div
-                    style={{
-                      width: 140,
-                    }}
-                  >
-                    <input
-                      type="number"
-                      min="0"
-                      step="1"
-                      value={
-                        form.warranty_ok_quantity
-                      }
-                      onChange={(event) =>
-                        updateForm(
-                          "warranty_ok_quantity",
-                          event.target.value
-                        )
-                      }
-                      placeholder="0"
-                      style={{
-                        ...inputStyle,
-                        fontSize: 17,
-                        fontWeight: 700,
-                      }}
-                    />
-                  </div>
                 </div>
 
                 {/* TOTAL */}
@@ -2507,18 +2565,72 @@ function JobCards({ technicianScopeId }: { technicianScopeId?: number | null } =
                   }}
                 >
                   <FormField label="Module Photo">
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={
-                        handleImage
-                      }
+                    <div
                       style={{
-                        ...inputStyle,
-                        padding:
-                          9,
+                        display:
+                          "flex",
+                        gap: 10,
+                        flexWrap:
+                          "wrap",
                       }}
-                    />
+                    >
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void openCamera()
+                        }
+                        style={{
+                          border:
+                            "none",
+                          background:
+                            "#0f172a",
+                          color:
+                            "#ffffff",
+                          padding:
+                            "11px 18px",
+                          borderRadius:
+                            9,
+                          fontWeight:
+                            800,
+                          fontSize: 14,
+                          cursor:
+                            "pointer",
+                        }}
+                      >
+                        📷 Camera se Photo
+                      </button>
+
+                      <label
+                        style={{
+                          background:
+                            "#f1f5f9",
+                          color:
+                            "#334155",
+                          padding:
+                            "11px 18px",
+                          borderRadius:
+                            9,
+                          fontWeight:
+                            700,
+                          fontSize: 14,
+                          cursor:
+                            "pointer",
+                        }}
+                      >
+                        🖼 Gallery
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={
+                            handleImage
+                          }
+                          style={{
+                            display:
+                              "none",
+                          }}
+                        />
+                      </label>
+                    </div>
                   </FormField>
 
                   {form.module_image_url && (
@@ -2582,6 +2694,139 @@ function JobCards({ technicianScopeId }: { technicianScopeId?: number | null } =
                     </div>
                   )}
                 </div>
+
+                {/* CAMERA OVERLAY */}
+
+                {cameraOn && (
+                  <div
+                    style={{
+                      position:
+                        "fixed",
+                      inset: 0,
+                      background:
+                        "rgba(15,23,42,.85)",
+                      display:
+                        "flex",
+                      flexDirection:
+                        "column",
+                      alignItems:
+                        "center",
+                      justifyContent:
+                        "center",
+                      gap: 16,
+                      padding: 16,
+                      zIndex: 10000,
+                    }}
+                  >
+                    <video
+                      ref={videoRef}
+                      autoPlay
+                      playsInline
+                      muted
+                      style={{
+                        width:
+                          "100%",
+                        maxWidth: 520,
+                        maxHeight:
+                          "70vh",
+                        borderRadius:
+                          14,
+                        background:
+                          "#000000",
+                        objectFit:
+                          "contain",
+                      }}
+                    />
+
+                    {cameraError && (
+                      <div
+                        style={{
+                          color:
+                            "#fecaca",
+                          fontSize: 13,
+                          fontWeight:
+                            700,
+                          textAlign:
+                            "center",
+                        }}
+                      >
+                        {cameraError}
+                      </div>
+                    )}
+
+                    <div
+                      style={{
+                        display:
+                          "flex",
+                        gap: 12,
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={
+                          capturePhoto
+                        }
+                        style={{
+                          border:
+                            "none",
+                          background:
+                            "#22c55e",
+                          color:
+                            "#ffffff",
+                          padding:
+                            "13px 26px",
+                          borderRadius:
+                            10,
+                          fontWeight:
+                            800,
+                          fontSize: 15,
+                          cursor:
+                            "pointer",
+                        }}
+                      >
+                        📸 Capture
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={
+                          stopCamera
+                        }
+                        style={{
+                          border:
+                            "none",
+                          background:
+                            "#e2e8f0",
+                          color:
+                            "#0f172a",
+                          padding:
+                            "13px 26px",
+                          borderRadius:
+                            10,
+                          fontWeight:
+                            800,
+                          fontSize: 15,
+                          cursor:
+                            "pointer",
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+
+                    <div
+                      style={{
+                        color:
+                          "#cbd5e1",
+                        fontSize: 12,
+                        textAlign:
+                          "center",
+                      }}
+                    >
+                      Module par camera point karke Capture dabayein.
+                    </div>
+                  </div>
+                )}
 
                 {/* STATUS INFO */}
 

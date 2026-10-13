@@ -1,10 +1,10 @@
 export type ProfitInvoice = { id: number; invoice_date: string | null; total_amount: number | null };
-export type ProfitJob = { job_date: string | null; repairing_quantity: number | null; warranty_quantity: number | null; reject_quantity?: number | null; warranty_ok_quantity?: number | null };
+export type ProfitJob = { job_date: string | null; repairing_quantity: number | null; warranty_quantity: number | null; reject_quantity?: number | null };
 export type ProfitBankRow = { transaction_date: string | null; created_at: string | null; amount: number | null; debit_amount: number | null; payment_out: number | null; payment_in: number | null; particulars: string | null; type: string | null; transaction_type: string | null; is_transfer?: boolean | null; bounced_at?: string | null };
 export type ProfitPurchase = { inward_no: string | null; purchase_no?: string | null; item_name: string | null; item_code?: string | null; rate: number | null; purchase_rate?: number | null; quantity: number | null };
 export type ProfitItem = { id: number; item_name: string | null; item_code: string | null; purchase_price: number | null; cost_price: number | null; opening_stock: number | null };
 export type ProfitLine = { invoice_id: number; inward_no: string | null; item_name: string | null; item_code?: string | null; quantity: number | null; cost_rate: number | null; total_cost?: number | null };
-export type ProfitMonthly = { key: string; label: string; sale: number; cost: number; expense: number; grossProfit: number; deduction: number; netProfit: number; personal: number; saving: number; repairQty: number; warrantyQty: number; warrantyOkQty: number };
+export type ProfitMonthly = { key: string; label: string; sale: number; cost: number; expense: number; grossProfit: number; deduction: number; netProfit: number; personal: number; saving: number; repairQty: number; warrantyQty: number };
 
 const months = ["April", "May", "June", "July", "August", "September", "October", "November", "December", "January", "February", "March"];
 export const currentYear = new Date().getFullYear();
@@ -39,10 +39,10 @@ export const computeProfitMonthly = (data: {
   const invoiceMap = new Map(invoices.map((invoice) => [invoice.id, invoice]));
   const rateFor = (line: ProfitLine) => lineCostRate(line, purchases, items);
 
-  const rows = months.map((label, index) => ({ key: String(index), label, sale: 0, cost: 0, expense: 0, grossProfit: 0, deduction: 0, netProfit: 0, personal: 0, saving: 0, repairQty: 0, warrantyQty: 0, warrantyOkQty: 0 }));
+  const rows = months.map((label, index) => ({ key: String(index), label, sale: 0, cost: 0, expense: 0, grossProfit: 0, deduction: 0, netProfit: 0, personal: 0, saving: 0, repairQty: 0, warrantyQty: 0 }));
   invoices.forEach((invoice) => { const index = monthPosition(invoice.invoice_date, startYear); if (index >= 0) rows[index].sale += toNumber(invoice.total_amount); });
   lines.forEach((line) => { const index = monthPosition(invoiceMap.get(line.invoice_id)?.invoice_date, startYear); if (index >= 0) rows[index].cost += toNumber(line.quantity) * rateFor(line); });
-  jobs.forEach((job) => { const index = monthPosition(job.job_date, startYear); if (index >= 0) { rows[index].repairQty += toNumber(job.repairing_quantity); rows[index].warrantyQty += toNumber(job.warranty_quantity); rows[index].warrantyOkQty += toNumber(job.warranty_ok_quantity); } });
+  jobs.forEach((job) => { const index = monthPosition(job.job_date, startYear); if (index >= 0) { rows[index].repairQty += toNumber(job.repairing_quantity); rows[index].warrantyQty += toNumber(job.warranty_quantity); } });
   bankRows.forEach((row) => {
     // Bounced/returned payment expense, personal aur deduction — kuch bhi
     // nahi tha; paisa hua hi nahi, isliye poori row skip.
@@ -66,5 +66,5 @@ export const computeProfitMonthly = (data: {
 };
 
 export const profitTotals = (monthly: ProfitMonthly[]) => monthly.reduce((sum, row) => ({
-  sale: sum.sale + row.sale, cost: sum.cost + row.cost, expense: sum.expense + row.expense, grossProfit: sum.grossProfit + row.grossProfit, deduction: sum.deduction + row.deduction, netProfit: sum.netProfit + row.netProfit, personal: sum.personal + row.personal, saving: sum.saving + row.saving, repairQty: sum.repairQty + row.repairQty, warrantyQty: sum.warrantyQty + row.warrantyQty, warrantyOkQty: sum.warrantyOkQty + row.warrantyOkQty,
-}), { sale: 0, cost: 0, expense: 0, grossProfit: 0, deduction: 0, netProfit: 0, personal: 0, saving: 0, repairQty: 0, warrantyQty: 0, warrantyOkQty: 0 });
+  sale: sum.sale + row.sale, cost: sum.cost + row.cost, expense: sum.expense + row.expense, grossProfit: sum.grossProfit + row.grossProfit, deduction: sum.deduction + row.deduction, netProfit: sum.netProfit + row.netProfit, personal: sum.personal + row.personal, saving: sum.saving + row.saving, repairQty: sum.repairQty + row.repairQty, warrantyQty: sum.warrantyQty + row.warrantyQty,
+}), { sale: 0, cost: 0, expense: 0, grossProfit: 0, deduction: 0, netProfit: 0, personal: 0, saving: 0, repairQty: 0, warrantyQty: 0 });

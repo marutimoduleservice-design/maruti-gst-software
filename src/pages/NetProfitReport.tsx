@@ -5,7 +5,7 @@ import { currentFY, fyOptions, fyStartYear } from "../lib/financialYear";
 import { SortTh, useSortedRows } from "../lib/tableSort";
 
 type Invoice = { id: number; invoice_date: string | null; total_amount: number | null };
-type JobCard = { job_date: string | null; repairing_quantity: number | null; warranty_quantity: number | null; reject_quantity: number | null; warranty_ok_quantity?: number | null; business_name?: string | null; customer_id?: number | null; customer_name?: string | null };
+type JobCard = { job_date: string | null; repairing_quantity: number | null; warranty_quantity: number | null; reject_quantity: number | null; business_name?: string | null; customer_id?: number | null; customer_name?: string | null };
 type BankRow = { transaction_date: string | null; created_at: string | null; amount: number | null; debit_amount: number | null; payment_out: number | null; payment_in: number | null; particulars: string | null; type: string | null; transaction_type: string | null };
 type Purchase = { inward_no: string | null; purchase_no?: string | null; item_name: string | null; item_code?: string | null; rate: number | null; purchase_rate?: number | null; quantity: number | null };
 type Item = { id: number; item_name: string | null; item_code: string | null; purchase_price: number | null; cost_price: number | null; opening_stock: number | null };
@@ -162,7 +162,7 @@ function NetProfitReport() {
       return sum + itemStockValue;
     }, 0);
   }, [items, purchases, lines, jobs]);
-  const warrantyPercentage = totals.repairQty ? (totals.warrantyQty - totals.warrantyOkQty) / totals.repairQty * 100 : 0;
+  const warrantyPercentage = totals.repairQty ? totals.warrantyQty / totals.repairQty * 100 : 0;
 
   // ─── Party Wise Module Repair ──────────────────────────────
   // Job Card quantities ko Month + Business Name ke hisaab se group karta hai.
@@ -180,7 +180,7 @@ function NetProfitReport() {
   };
 
   const partyRows = useMemo(() => {
-    const grouped = new Map<string, { month: string; monthIndex: number; business: string; repair: number; warranty: number; warrantyOk: number }>();
+    const grouped = new Map<string, { month: string; monthIndex: number; business: string; repair: number; warranty: number }>();
 
     jobs.forEach((job) => {
       const index = monthOf(job.job_date);
@@ -195,11 +195,9 @@ function NetProfitReport() {
         business,
         repair: 0,
         warranty: 0,
-        warrantyOk: 0,
       };
       existing.repair += toNumber(job.repairing_quantity);
       existing.warranty += toNumber(job.warranty_quantity);
-      existing.warrantyOk += toNumber(job.warranty_ok_quantity);
       grouped.set(key, existing);
     });
 
@@ -207,7 +205,7 @@ function NetProfitReport() {
       .map((row) => ({
         ...row,
         grand: row.repair + row.warranty,
-        warrantyPercent: row.repair ? ((row.warranty - row.warrantyOk) / row.repair) * 100 : 0,
+        warrantyPercent: row.repair ? (row.warranty / row.repair) * 100 : 0,
       }))
       .sort((a, b) => a.monthIndex - b.monthIndex || a.business.localeCompare(b.business, undefined, { numeric: true, sensitivity: "base" }));
   }, [jobs, startYear, partyMonth]);
@@ -223,11 +221,11 @@ function NetProfitReport() {
   const { sort: pSort, sorted: sortedPartyRows } = useSortedRows(partyRows, partyCols, "month");
 
   const partyTotals = useMemo(() => partyRows.reduce(
-    (acc, row) => ({ repair: acc.repair + row.repair, warranty: acc.warranty + row.warranty, warrantyOk: acc.warrantyOk + row.warrantyOk }),
-    { repair: 0, warranty: 0, warrantyOk: 0 }
+    (acc, row) => ({ repair: acc.repair + row.repair, warranty: acc.warranty + row.warranty }),
+    { repair: 0, warranty: 0 }
   ), [partyRows]);
   const partyGrand = partyTotals.repair + partyTotals.warranty;
-  const partyWarrantyPercent = partyTotals.repair ? ((partyTotals.warranty - partyTotals.warrantyOk) / partyTotals.repair) * 100 : 0;
+  const partyWarrantyPercent = partyTotals.repair ? (partyTotals.warranty / partyTotals.repair) * 100 : 0;
 
   const exportPartyCSV = () => {
     const headers = ["Business Name", "Total Module Service", "Total Warranty Service", "Grand Total", "Warranty Percentage"];
@@ -255,7 +253,7 @@ function NetProfitReport() {
       <div className="profit-kpi-grid"><MetricCard title="Total Sale" value={money(totals.sale)} subtitle="Direct + Job Card invoices" tone="blue" /><MetricCard title="Total Cost" value={money(totals.cost)} subtitle="Spare parts purchase cost" tone="orange" /><MetricCard title="Total Expense" value={money(totals.expense)} subtitle="Passbook expenses" tone="red" /><MetricCard title="Gross Profit" value={money(totals.grossProfit)} subtitle="Sale - Cost - Expense" tone="slate" /><MetricCard title="Payment Cut" value={money(totals.deduction)} subtitle="Customer discount" tone="amber" /><MetricCard title="Net Profit" value={money(totals.netProfit)} subtitle="Gross Profit - Payment Cut" tone={totals.netProfit >= 0 ? "green" : "red"} /><MetricCard title="Personal" value={money(totals.personal)} subtitle="Owner drawings" tone="purple" /><MetricCard title="Saving" value={money(totals.saving)} subtitle="Net Profit - Personal" tone="blue" /><MetricCard title="Stock Total" value={money(stockTotal)} subtitle="Current stock purchase value" tone="teal" /></div>
       <ProfitSection title="Monthly Profit & Loss" subtitle={`${startYear}-04-01 to ${startYear + 1}-03-31`}><div className="responsive-table-wrapper"><table className="profit-table"><thead><tr>{["Month", "Total Sale", "Total Cost", "Total Expense", "Gross Profit", "Payment Cut", "Net Profit", "Personal", "Saving"].map((heading) => <th key={heading}>{heading}</th>)}</tr></thead><tbody>{loading ? <tr><td colSpan={9}>Loading report...</td></tr> : [...monthly, { ...monthly[0], key: "total", label: `Per Month Avg (${elapsedMonthCount} Months)`, sale: totals.sale / elapsedMonthCount, cost: totals.cost / elapsedMonthCount, expense: totals.expense / elapsedMonthCount, grossProfit: totals.grossProfit / elapsedMonthCount, deduction: totals.deduction / elapsedMonthCount, netProfit: totals.netProfit / elapsedMonthCount, personal: totals.personal / elapsedMonthCount, saving: totals.saving / elapsedMonthCount, repairQty: totals.repairQty / elapsedMonthCount, warrantyQty: totals.warrantyQty / elapsedMonthCount }].map((row) => <tr key={row.key} className={row.key === "total" ? "total-row" : ""}><td><strong>{row.label}</strong></td><td>{money(row.sale)}</td><td>{money(row.cost)}</td><td>{money(row.expense)}</td><td>{money(row.grossProfit)}</td><td>{money(row.deduction)}</td><td>{money(row.netProfit)}</td><td>{money(row.personal)}</td><td>{money(row.saving)}</td></tr>)}</tbody></table></div></ProfitSection>
       <div className="profit-detail-grid"><ProfitSection title="Module Repair & Warranty" subtitle="Job Card quantities"><div className="repair-profit-summary"><div><span>Module Service</span><strong>{totals.repairQty}</strong></div><div><span>Warranty Service</span><strong>{totals.warrantyQty}</strong></div><div><span>Grand Total</span><strong>{totals.repairQty + totals.warrantyQty}</strong></div><div><span>Warranty Percentage</span><strong>{warrantyPercentage.toFixed(2)}%</strong></div></div></ProfitSection><ProfitSection title="Stock Valuation" subtitle="Current stock purchase value"><div className="stock-total-highlight">{money(stockTotal)}</div><p className="profit-note">Current stock quantity × purchase price.</p></ProfitSection></div>
-      <ProfitSection title="Monthly Service & Warranty Report" subtitle="Job Card quantities by month"><div className="responsive-table-wrapper"><table className="profit-table"><thead><tr><th>Month</th><th>Module Service</th><th>Warranty Service</th><th>Grand Total</th><th>Warranty Percentage</th></tr></thead><tbody>{monthly.map((row) => <tr key={`service-${row.key}`}><td>{row.label}</td><td>{row.repairQty}</td><td>{row.warrantyQty}</td><td>{row.repairQty + row.warrantyQty}</td><td>{row.repairQty ? `${((row.warrantyQty - row.warrantyOkQty) / row.repairQty * 100).toFixed(2)}%` : "0.00%"}</td></tr>)}</tbody></table></div></ProfitSection>
+      <ProfitSection title="Monthly Service & Warranty Report" subtitle="Job Card quantities by month"><div className="responsive-table-wrapper"><table className="profit-table"><thead><tr><th>Month</th><th>Module Service</th><th>Warranty Service</th><th>Grand Total</th><th>Warranty Percentage</th></tr></thead><tbody>{monthly.map((row) => <tr key={`service-${row.key}`}><td>{row.label}</td><td>{row.repairQty}</td><td>{row.warrantyQty}</td><td>{row.repairQty + row.warrantyQty}</td><td>{row.repairQty ? `${(row.warrantyQty / row.repairQty * 100).toFixed(2)}%` : "0.00%"}</td></tr>)}</tbody></table></div></ProfitSection>
       <section className="profit-section">
         <div className="profit-section-heading">
           <div>
