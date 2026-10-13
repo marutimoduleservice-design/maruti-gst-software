@@ -269,13 +269,29 @@ export const buildSalesInvoiceBody = async (params: {
       qrDataUrl = "";
     }
   }
-  const itemRows = items.length
-    ? items.map((it: any, i: number) => `<tr>
+  const mergedItems: { item_name: string; quantity: number; rate: number; total: number }[] = [];
+  const mergeIndex = new Map<string, number>();
+  items.forEach((it: any) => {
+    const key = String(it.item_name || "-").trim().toLowerCase();
+    const qty = Number(it.quantity) || 0;
+    const amt = Number(it.total) || qty * (Number(it.rate) || 0);
+    const at = mergeIndex.get(key);
+    if (at === undefined) {
+      mergeIndex.set(key, mergedItems.length);
+      mergedItems.push({ item_name: String(it.item_name || "-"), quantity: qty, rate: 0, total: amt });
+    } else {
+      mergedItems[at].quantity += qty;
+      mergedItems[at].total += amt;
+    }
+  });
+  mergedItems.forEach((g) => { g.rate = g.quantity > 0 ? g.total / g.quantity : 0; });
+  const itemRows = mergedItems.length
+    ? mergedItems.map((it, i: number) => `<tr>
         <td class="c">${i + 1}</td>
         <td>${esc(it.item_name || "-")}</td>
-        <td class="c">${Number(it.quantity || 0)}</td>
-        <td class="r">${money(Number(it.rate || 0))}</td>
-        <td class="r">${money(Number(it.total) || Number(it.quantity || 0) * Number(it.rate || 0))}</td>
+        <td class="c">${it.quantity}</td>
+        <td class="r">${money(it.rate)}</td>
+        <td class="r">${money(it.total)}</td>
       </tr>`).join("")
     : `<tr>
         <td class="c">1</td>
