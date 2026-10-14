@@ -117,14 +117,59 @@ export const whatsappHref = (mobile: unknown, message: string): string => {
   return `https://wa.me/${num}?text=${encodeURIComponent(message)}`;
 };
 
-/** WhatsApp web/app ko prefilled message ke saath kholo. Number galat ho to false. */
+/** Device mobile hai ya nahi (mobile app vs desktop app decide karne ke liye). */
+const isMobileDevice = (): boolean =>
+  typeof navigator !== "undefined" &&
+  /Android|iPhone|iPad|iPod|Windows Phone|webOS|BlackBerry|Mobile/i.test(navigator.userAgent || "");
+
+/**
+ * WhatsApp chat kholo. Mobile par https://wa.me (seedha app khulti hai) aur
+ * desktop par installed WhatsApp Desktop app (whatsapp://) kholne ki koshish.
+ * Desktop app na mile to wa.me web par fallback ho jaata hai.
+ */
+const openWhatsAppChat = (num: string, message: string): void => {
+  const text = encodeURIComponent(message);
+
+  if (isMobileDevice()) {
+    window.open(`https://wa.me/${num}?text=${text}`, "_blank", "noopener");
+    return;
+  }
+
+  const appHref = `whatsapp://send?phone=${num}&text=${text}`;
+  const webHref = `https://wa.me/${num}?text=${text}`;
+
+  let handled = false;
+  const onBlur = () => {
+    handled = true;
+  };
+
+  window.addEventListener("blur", onBlur, { once: true });
+
+  const link = document.createElement("a");
+  link.href = appHref;
+  link.style.display = "none";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+
+  window.setTimeout(() => {
+    window.removeEventListener("blur", onBlur);
+
+    // App handle nahi hua (installed nahi) to web par bhej do.
+    if (!handled) {
+      window.open(webHref, "_blank", "noopener");
+    }
+  }, 1500);
+};
+
+/** WhatsApp chat kholo (mobile app ya desktop app). Number galat ho to false. */
 export const openWhatsApp = (mobile: unknown, message: string): boolean => {
-  const href = whatsappHref(mobile, message);
-  if (!href) {
+  const num = normalizeWhatsAppNumber(mobile);
+  if (!num) {
     alert("Customer ka valid WhatsApp mobile number nahi mila.");
     return false;
   }
-  window.open(href, "_blank", "noopener");
+  openWhatsAppChat(num, message);
   return true;
 };
 
@@ -370,9 +415,9 @@ export async function shareFileToWhatsApp(p: {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
-  const href = whatsappHref(p.mobile, p.message);
-  if (!href) return "no-number";
-  window.open(href, "_blank", "noopener");
+  const num = normalizeWhatsAppNumber(p.mobile);
+  if (!num) return "no-number";
+  openWhatsAppChat(num, p.message);
   return "downloaded";
 }
 
@@ -452,6 +497,7 @@ export const buildSalesInvoiceBody = async (params: {
   const totalModules =
     moduleQty +
     sumQty((n) => n.includes("warranty service")) +
+    sumQty((n) => n.includes("warranty ok")) +
     sumQty((n) => n.includes("reject module"));
   const perModule = moduleQty > 0 ? total / moduleQty : 0;
   const moduleSummary = totalModules > 0

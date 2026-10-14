@@ -13,7 +13,8 @@ import {
   dueDateFromTerm,
   makeDefaultCompany,
   openPrintWindow,
-  openWhatsApp,
+  renderDocToFiles,
+  shareFileToWhatsApp,
   type InvoicePrintCompany,
 } from "../lib/salesInvoiceTemplate";
 
@@ -69,6 +70,7 @@ type JobCard = {
   customer_id: number;
   repairing_quantity: number;
   warranty_quantity: number;
+  warranty_ok_quantity?: number;
   reject_quantity: number;
   status: string;
   customers: { customer_name: string; business_name?: string; mobile: string; address?: string };
@@ -113,6 +115,7 @@ const [invoicedQtyByJob, setInvoicedQtyByJob] = useState<Record<string, number>>
 
   const [company, setCompany] = useState<InvoicePrintCompany>(() => makeDefaultCompany());
   const [historyInvoice, setHistoryInvoice] = useState<Invoice | null>(null);
+  const [sharingInvoice, setSharingInvoice] = useState<number | null>(null);
 
   const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split("T")[0]);
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
@@ -183,6 +186,21 @@ const [invoicedQtyByJob, setInvoicedQtyByJob] = useState<Record<string, number>>
 
     const customerRows = (custRes.data || []) as Customer[];
     const jobRows = (jobRes.data || []) as Omit<JobCard, "customers">[];
+
+    // `warranty_ok_quantity` naya column hai — migration na chali ho to Job Card
+    // list phir bhi load rahe, sirf Warranty OK count 0 maan liya jaye.
+    if (jobRows.length > 0) {
+      const okRes = await sc("job_cards").select("id, warranty_ok_quantity");
+      if (!okRes.error && okRes.data) {
+        const okMap = new Map<number, number>(
+          (okRes.data as any[]).map((r) => [Number(r.id), Number(r.warranty_ok_quantity) || 0]),
+        );
+        jobRows.forEach((job) => {
+          job.warranty_ok_quantity = okMap.get(Number(job.id)) ?? 0;
+        });
+      }
+    }
+
     let masterRows = (itemRes.data || []) as ItemMaster[];
     if (masterRows.length === 0) {
       const fallbackItems = await sc("item_master").select("*");
@@ -275,7 +293,7 @@ const [invoicedQtyByJob, setInvoicedQtyByJob] = useState<Record<string, number>>
       );
       (invoiceItemsRes.data || []).forEach((it: any) => {
         const inwardNo = String(it.inward_no || "");
-        if (inwardNo !== "JOB-REP" && inwardNo !== "JOB-WAR" && inwardNo !== "JOB-REJ") return;
+        if (inwardNo !== "JOB-REP" && inwardNo !== "JOB-WAR" && inwardNo !== "JOB-REJ" && inwardNo !== "JOB-WOK") return;
         const qty = Number(it.quantity || 0);
         const invId = Number(it.invoice_id);
         byInvoice[`${invId}|${inwardNo}`] = (byInvoice[`${invId}|${inwardNo}`] || 0) + qty;
@@ -377,6 +395,24 @@ if (repStats.pending > 0) {
           quantity: warrantyLeft,
           rate: rate,
           total: warrantyLeft * rate,
+          cost_rate: 0,
+          max_stock: 999,
+          editable: false,
+        });
+      }
+
+      const warrantyOkLeft = getRemainingQty(Number(job.id), "JOB-WOK", Number(job.warranty_ok_quantity || 0));
+      if (warrantyOkLeft > 0) {
+        const rate = getMasterItemPrice("Warranty OK", String(job.customer_id));
+        breakdownLines.push({
+          id: Math.random().toString(),
+          source: "Warranty OK",
+          inward_no: "JOB-WOK",
+          item_id: "",
+          item_name: "Warranty OK Module",
+          quantity: warrantyOkLeft,
+          rate: rate,
+          total: warrantyOkLeft * rate,
           cost_rate: 0,
           max_stock: 999,
           editable: false,
@@ -794,7 +830,38 @@ if (repStats.pending > 0) {
 
   const handleWhatsAppInvoice = async (inv: Invoice) => {
     const ctx = await buildInvoiceShareContext(inv);
-    openWhatsApp(ctx.customer?.mobile, ctx.message);
+    setSharingInvoice(inv.id);
+    try {
+      const body = await buildSalesInvoiceBody({
+        invoice: inv,
+        customer: ctx.customer,
+        items: ctx.items,
+        receivedAmount: ctx.received,
+        COMPANY: company,
+      });
+      const files = await renderDocToFiles("Sales Invoice - " + (inv.invoice_no || ""), body, company, { png: true });
+      if (!files.png) {
+        alert("Invoice image generate nahi ho payi. Dobara try karein.");
+        return;
+      }
+      const filename = `Invoice-${String(inv.invoice_no || inv.id).replace(/[^\w]+/g, "_")}.png`;
+      const res = await shareFileToWhatsApp({
+        mobile: ctx.customer?.mobile,
+        message: ctx.message,
+        filename,
+        blob: files.png,
+      });
+      if (res === "downloaded") {
+        alert("Invoice image download ho gayi aur WhatsApp khul gaya. Image attach karke send kar dein.");
+      } else if (res === "no-number") {
+        alert("Valid WhatsApp number nahi mila. Invoice image download ho gayi, manually bhej dein.");
+      }
+    } catch (error) {
+      console.error(error);
+      alert("WhatsApp image banate waqt error aa gaya. Dobara try karein.");
+    } finally {
+      setSharingInvoice(null);
+    }
   };
 
 const handleDeleteInvoice = async (inv: Invoice) => {
@@ -1266,9 +1333,10 @@ const handleDeleteInvoice = async (inv: Invoice) => {
                       </button>
                       <button 
                         onClick={() => handleWhatsAppInvoice(inv)} 
-                        style={{ background: "#25D366", color: "white", border: "none", padding: "6px 10px", borderRadius: "4px", cursor: "pointer", fontWeight: "bold" }}
+                        disabled={sharingInvoice === inv.id}
+                        style={{ background: sharingInvoice === inv.id ? "#86efac" : "#25D366", color: "white", border: "none", padding: "6px 10px", borderRadius: "4px", cursor: sharingInvoice === inv.id ? "default" : "pointer", fontWeight: "bold" }}
                       >
-                        💬 WhatsApp
+                        {sharingInvoice === inv.id ? "Bhej rahe..." : "💬 WhatsApp"}
                       </button>
                       <button 
                         onClick={() => setHistoryInvoice(inv)} 
