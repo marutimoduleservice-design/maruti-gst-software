@@ -633,7 +633,13 @@ if (repStats.pending > 0) {
             } else if (updatedLine.source === "Spare Part") {
               // Har keystroke par live available dobara nikalo — editing me
               // apni purani billed qty minus hoti hai, warna limit kam dikhti.
-              const stockRow = purchaseStock.find((ps) => String(ps.id) === String(updatedLine.purchase_line_id));
+              const stockRow =
+                purchaseStock.find((ps) => String(ps.id) === String(updatedLine.purchase_line_id)) ||
+                purchaseStock.find(
+                  (ps) =>
+                    String(ps.inward_no || "").trim().toLowerCase() === String(updatedLine.inward_no || "").trim().toLowerCase() &&
+                    String(ps.item_name || "").trim().toLowerCase() === String(updatedLine.item_name || "").trim().toLowerCase()
+                );
               const liveAvailable = stockRow
                 ? getAvailablePurchaseQty(stockRow, id, prev)
                 : Number(updatedLine.max_stock || 0);
@@ -730,9 +736,13 @@ if (repStats.pending > 0) {
             item_code: it.item_code || "",
             item_name: it.item_name || "",
           });
+          // invoice_items me item_code column nahi hai — isliye inward_no + item_name
+          // se match karo (getPurchaseLineKey bhi yahi key use karta hai). Pehle
+          // purchase.item_code vs invoice item_name compare hota tha, jisse stock
+          // row kabhi match nahi hota tha aur qty limit apni hi billed qty ban jati thi.
           const matchedStock = purchaseStock.find((purchase) =>
-            String(purchase.inward_no || "") === String(it.inward_no || "") &&
-            String(purchase.item_code || purchase.item_name || "").trim().toLowerCase() === String(it.item_code || it.item_name || "").trim().toLowerCase()
+            String(purchase.inward_no || "").trim().toLowerCase() === String(it.inward_no || "").trim().toLowerCase() &&
+            String(purchase.item_name || "").trim().toLowerCase() === String(it.item_name || "").trim().toLowerCase()
           );
           const lineQty = Number(it.quantity || 0);
           // Available = inward stock − doosron ka sold − is invoice ki baaki lines.
