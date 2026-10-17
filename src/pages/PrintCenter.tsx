@@ -695,7 +695,7 @@ function PrintCenter() {
   </div>
   ${custInvoices.length === 0 && receiptRows.length === 0 ? '<div class="notes">No transactions found for this customer.</div>' : `
   <table>
-    <thead><tr><th>Date</th><th>Reference No.</th><th>Particulars</th><th class="r">Debit (?)</th><th class="r">Credit (?)</th><th class="r">Balance (?)</th></tr></thead>
+    <thead><tr><th>Date</th><th>Reference No.</th><th>Particulars</th><th class="r">Debit (₹)</th><th class="r">Credit (₹)</th><th class="r">Balance (₹)</th></tr></thead>
     <tbody>${rows.join("")}</tbody>
     <tr class="tot-row"><td colspan="3" style="text-align:right">Closing Balance</td><td class="r">${money(totalBilled)}</td><td class="r">${money(totalReceived)}</td><td class="r">${money(balance)}</td></tr>
   </table>
@@ -799,7 +799,7 @@ function PrintCenter() {
     </tr>
   </table>`
         : `<table>
-    <thead><tr><th>Date</th><th>Invoice / Receipt Ref.</th><th>Particulars</th><th class="r">Debit / Bill (?)</th><th class="r">Credit / Receipt (?)</th><th class="r">Pending (?)</th></tr></thead>
+    <thead><tr><th>Date</th><th>Invoice / Receipt Ref.</th><th>Particulars</th><th class="r">Debit / Bill (₹)</th><th class="r">Credit / Receipt (₹)</th><th class="r">Pending (₹)</th></tr></thead>
     <tbody>${rows.join("")}</tbody>
     <tr class="tot-row"><td colspan="3" style="text-align:right">Total</td><td class="r">${money(totalBilled)}</td><td class="r">${money(totalReceived)}</td><td class="r">${money(totalPending)}</td></tr>
   </table>`
