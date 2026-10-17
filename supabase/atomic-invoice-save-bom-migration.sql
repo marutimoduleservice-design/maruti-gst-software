@@ -65,9 +65,21 @@ begin
         as x(item_id bigint, quantity numeric)
     loop
       if v_old_line.item_id is not null then
-        update public.item_master
-           set opening_stock = coalesce(opening_stock, 0) + coalesce(v_old_line.quantity, 0)
-         where id = v_old_line.item_id;
+        if exists (select 1 from public.item_bom where parent_item_id = v_old_line.item_id) then
+          for v_comp in
+            select b.child_item_id, b.quantity * v_old_line.quantity as need_qty
+            from public.item_bom b
+            where b.parent_item_id = v_old_line.item_id
+          loop
+            update public.item_master
+               set opening_stock = coalesce(opening_stock, 0) + coalesce(v_comp.need_qty, 0)
+             where id = v_comp.child_item_id;
+          end loop;
+        else
+          update public.item_master
+             set opening_stock = coalesce(opening_stock, 0) + coalesce(v_old_line.quantity, 0)
+           where id = v_old_line.item_id;
+        end if;
       end if;
     end loop;
 
@@ -128,9 +140,24 @@ begin
        v_line.item_name, v_line.quantity, v_line.rate, v_line.total, v_line.cost_rate);
 
     if v_line.item_id is not null and v_line.source <> 'Spare Part' then
-      update public.item_master
-         set opening_stock = greatest(0, coalesce(opening_stock, 0) - coalesce(v_line.quantity, 0))
-       where id = v_line.item_id;
+      -- Check if item has BOM - if yes, consume components
+      if exists (select 1 from public.item_bom where parent_item_id = v_line.item_id) then
+        -- consume components
+        for v_comp in
+          select b.child_item_id, b.quantity * v_line.quantity as need_qty
+          from public.item_bom b
+          where b.parent_item_id = v_line.item_id
+        loop
+          update public.item_master
+             set opening_stock = greatest(0, coalesce(opening_stock, 0) - coalesce(v_comp.need_qty, 0))
+           where id = v_comp.child_item_id;
+        end loop;
+      else
+        -- consume parent itself
+        update public.item_master
+           set opening_stock = greatest(0, coalesce(opening_stock, 0) - coalesce(v_line.quantity, 0))
+         where id = v_line.item_id;
+      end if;
     end if;
   end loop;
 
