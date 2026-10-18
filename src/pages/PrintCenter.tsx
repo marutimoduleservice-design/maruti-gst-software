@@ -29,11 +29,11 @@ type TabKey = "po" | "invoice" | "receipt" | "payment" | "ledger";
 const ALL_PARTY_KEY = "__ALL_PARTY__";
 
 const TABS: { key: TabKey; label: string; icon: string; desc: string }[] = [
-  { key: "po", label: "Purchase PO", icon: "??", desc: "Purchase Order for vendor" },
-  { key: "invoice", label: "Sales Invoice", icon: "??", desc: "Invoice for customer" },
-  { key: "receipt", label: "Payment Receipt", icon: "??", desc: "Money received from customer" },
-  { key: "payment", label: "Payment Paid", icon: "??", desc: "Money paid to vendor" },
-  { key: "ledger", label: "Customer Ledger", icon: "??", desc: "Full account statement" },
+  { key: "po", label: "Purchase PO", icon: "🛒", desc: "Purchase Order for vendor" },
+  { key: "invoice", label: "Sales Invoice", icon: "🧾", desc: "Invoice for customer" },
+  { key: "receipt", label: "Payment Receipt", icon: "💵", desc: "Money received from customer" },
+  { key: "payment", label: "Payment Paid", icon: "🏦", desc: "Money paid to vendor" },
+  { key: "ledger", label: "Customer Ledger", icon: "📒", desc: "Full account statement" },
 ];
 
 const COMPANY = {
@@ -138,7 +138,7 @@ function PrintCenter() {
           customerRefs: (invoicesData as any[]).filter((iv) => String(r.particulars || "").includes(String(iv.invoice_no || ""))),
         }));
 
-        // Customer-wise received/deduction &mdash; `payment_allocations` table se
+        // Customer-wise received/deduction — `payment_allocations` table se
         // (buildAllocations table-first). Rows nahi to wahi purana text-parse.
         await loadDbAllocations(true);
         const invoiceBillsForAlloc: AllocBill[] = (invoicesData as any[]).map((iv: any) => ({
@@ -219,7 +219,7 @@ function PrintCenter() {
 
   const customerName = (id: unknown) => {
     const c = customers.find((cc) => String(cc.id) === String(id));
-    return c ? c.business_name || c.customer_name || "Customer" : "&mdash;";
+    return c ? c.business_name || c.customer_name || "Customer" : "—";
   };
 
   const vendorName = (pid: unknown, vName?: unknown) => {
@@ -283,12 +283,12 @@ function PrintCenter() {
     <div class="info-box">
       <div class="info-row"><span>PO Reference</span><b>${esc(po.purchase_no || po.inward_no || "-")}</b></div>
       <div class="info-row"><span>Status</span><b>${esc(statusLabel)}</b></div>
-      <div class="info-row"><span>Payment Mode</span><b>${esc(po.payment_mode || "&mdash;")}</b></div>
+      <div class="info-row"><span>Payment Mode</span><b>${esc(po.payment_mode || "—")}</b></div>
       <div class="info-row"><span>Total Amount</span><b>${money(total)}</b></div>
     </div>
   </div>
   <table>
-    <thead><tr><th>#</th><th>Code</th><th>Item Description</th><th class="c">Qty</th><th class="r">Rate (?)</th><th class="r">Amount (?)</th></tr></thead>
+    <thead><tr><th>#</th><th>Code</th><th>Item Description</th><th class="c">Qty</th><th class="r">Rate (₹)</th><th class="r">Amount (₹)</th></tr></thead>
     <tbody>${items.map((i, idx) => `<tr><td>${idx + 1}</td><td>${esc(i.code)}</td><td style="font-weight:600">${esc(i.item)}</td><td class="c">${i.qty}</td><td class="r">${i.rate.toFixed(2)}</td><td class="r">${money(i.total)}</td></tr>`).join("")}</tbody>
     <tr class="tot-row"><td colspan="5" style="text-align:right">Grand Total</td><td class="r">${money(total)}</td></tr>
   </table>
@@ -338,9 +338,9 @@ function PrintCenter() {
     const refs = (rc.customerRefs || []);
     const customerLabel = refs[0] ? customerName(refs[0].customer_id) : "Customer";
     const cust = refs[0] ? customerRecord(refs[0].customer_id) : null;
-    const totalDisc = Number(String(rc.particulars || "").match(/\[Disc:\s*?([\d.]+)\]/i)?.[1] || 0);
+    const totalDisc = Number(String(rc.particulars || "").match(/\[Disc:\s*₹([\d.]+)\]/i)?.[1] || 0);
 
-    // Bill-wise allocation: table-first &mdash; is receipt ki `payment_allocations`
+    // Bill-wise allocation: table-first — is receipt ki `payment_allocations`
     // rows seedha use karo. Rows nahi (purani entry) to wahi purana
     // text-distribution, exactly like the Payments & Ledger pending list.
     const dbAlloc = getDbAllocations(Number(rc.id));
@@ -364,9 +364,9 @@ function PrintCenter() {
           pending,
           status:
             pending <= 0 && invTotal > 0
-              ? "Paid"
+            ? "Paid"
               : alloc.paid > 0 || alloc.deduction > 0
-                ? "Partial"
+              ? "Partial"
                 : "Pending",
         });
       });
@@ -405,10 +405,10 @@ function PrintCenter() {
             <th>Invoice No</th>
             <th>Date</th>
             <th>Customer Name</th>
-            <th class="r">Invoice Total (?)</th>
-            <th class="r">Rec. Amount (?)</th>
-            <th class="r">Deduction (?)</th>
-            <th class="r">Pending (?)</th>
+            <th class="r">Invoice Total (₹)</th>
+            <th class="r">Rec. Amount (₹)</th>
+            <th class="r">Deduction (₹)</th>
+            <th class="r">Pending (₹)</th>
             <th class="c">Status</th>
           </tr>
         </thead>
@@ -434,7 +434,7 @@ function PrintCenter() {
           <td class="r">${money(billRows.reduce((s, b) => s + b.received, 0))}</td>
           <td class="r">${money(billRows.reduce((s, b) => s + b.deduction, 0))}</td>
           <td class="r">${money(billRows.reduce((s, b) => s + b.pending, 0))}</td>
-          <td class="c">&mdash;</td>
+          <td class="c">—</td>
         </tr>
       </table>
     </div>`
@@ -470,7 +470,7 @@ function PrintCenter() {
   </div>
   ${billTable}
   <div style="display:flex;align-items:center;gap:16px;padding:22px;border:1px solid #16a34a;border-radius:10px;margin:10px 0">
-    <div style="font-size:40px">?</div>
+    <div style="font-size:40px">✅</div>
     <div>
       <div style="font-size:20px;font-weight:900;color:#15803d">${money(amount)}</div>
       <div style="font-size:12px;color:#166534"><b>Rupees:</b> ${numToWords(Math.round(amount))} Only</div>
@@ -488,7 +488,7 @@ function PrintCenter() {
     const vendorPart = String(pm.particulars || "").replace(/^Vendor Payment:\s*/i, "").split(/[\(\[]/)[0].trim();
     const vendor = vendors.find((vv) => String(vv.business_name || vv.name || "").toLowerCase() === String(vendorPart || "").toLowerCase()) || vendors.find((vv) => String(vv.business_name || vv.name || "").toLowerCase().includes(String(vendorPart || "").toLowerCase().slice(0, 6)));
 
-    const totalDiscPM = Number(String(pm.particulars || "").match(/\[Disc:\s*?([\d.]+)\]/i)?.[1] || 0);
+    const totalDiscPM = Number(String(pm.particulars || "").match(/\[Disc:\s*₹([\d.]+)\]/i)?.[1] || 0);
     let remainingPaid = amount;
     let remainingDiscPM = totalDiscPM;
     const pRefs = (pm.paymentRefs || []);
@@ -501,7 +501,7 @@ function PrintCenter() {
       const purchaseById = new Map<number, any>(
         (purchases as any[]).map((pv: any) => [Number(pv.id), pv])
       );
-      // Ek hi inward number ki multiple purchase rows ho sakti hain &mdash; pehle
+      // Ek hi inward number ki multiple purchase rows ho sakti hain — pehle
       // inward ke naam se group karo (purana code bhi yahi karta tha).
       const grouped = new Map<string, { pv: any; paid: number; deduction: number; total: number }>();
       dbPm.forEach((alloc, billId) => {
@@ -562,7 +562,7 @@ function PrintCenter() {
       billGroups.push({
         no: inw,
         date: String(pv.purchase_date || "").slice(0, 10),
-        vendName: pv.vendor_name || vendorPart || (vendor?.business_name || vendor?.name || "-"),
+          vendName: pv.vendor_name || vendorPart || (vendor?.business_name || vendor?.name || "-"),
         total: groupTotal,
         paid: paidForBill,
         deduction: dedForBill,
@@ -579,10 +579,10 @@ function PrintCenter() {
             <th>Inward No</th>
             <th>Date</th>
             <th>Vendor Name</th>
-            <th class="r">Bill Total (?)</th>
-            <th class="r">Paid Amount (?)</th>
-            <th class="r">Deduction (?)</th>
-            <th class="r">Pending (?)</th>
+            <th class="r">Bill Total (₹)</th>
+            <th class="r">Paid Amount (₹)</th>
+            <th class="r">Deduction (₹)</th>
+            <th class="r">Pending (₹)</th>
             <th class="c">Status</th>
           </tr>
         </thead>
@@ -608,7 +608,7 @@ function PrintCenter() {
           <td class="r">${money(billGroups.reduce((s, b) => s + b.paid, 0))}</td>
           <td class="r">${money(billGroups.reduce((s, b) => s + b.deduction, 0))}</td>
           <td class="r">${money(billGroups.reduce((s, b) => s + b.pending, 0))}</td>
-          <td class="c">&mdash;</td>
+          <td class="c">—</td>
         </tr>
       </table>
     </div>`
@@ -642,7 +642,7 @@ function PrintCenter() {
   </div>
   ${pmBillTable}
   <div style="display:flex;align-items:center;gap:16px;padding:22px;border:1px solid #dc2626;border-radius:10px;margin:10px 0">
-    <div style="font-size:40px">??</div>
+    <div style="font-size:40px">✅</div>
     <div>
       <div style="font-size:20px;font-weight:900;color:#b91c1c">${money(amount)}</div>
       <div style="font-size:12px;color:#991b1b"><b>Rupees:</b> ${numToWords(Math.round(amount))} Only</div>
@@ -667,12 +667,12 @@ function PrintCenter() {
     const rows: string[] = [];
     custInvoices.forEach((iv: any) => {
       runningBalance += Number(iv.total_amount || 0);
-      rows.push(`<tr><td>${esc(fmtDate(iv.invoice_date || ""))}</td><td>${esc(iv.invoice_no || "-")}</td><td>Invoice</td><td class="r">${money(Number(iv.total_amount) || 0)}</td><td class="r">&mdash;</td><td class="r">${money(runningBalance)}</td></tr>`);
+      rows.push(`<tr><td>${esc(fmtDate(iv.invoice_date || ""))}</td><td>${esc(iv.invoice_no || "-")}</td><td>Invoice</td><td class="r">${money(Number(iv.total_amount) || 0)}</td><td class="r">—</td><td class="r">${money(runningBalance)}</td></tr>`);
     });
     receiptRows.forEach((rc: any) => {
       const amt = Number(rc.payment_in ?? rc.credit_amount ?? 0);
       runningBalance -= amt;
-      rows.push(`<tr><td>${esc(fmtDate(rc.transaction_date || rc.created_at || ""))}</td><td>${esc(rc.transaction_no || rc.reference_no || "RC-" + String(rc.id || ""))}</td><td>Receipt</td><td class="r">&mdash;</td><td class="r">${money(amt)}</td><td class="r">${money(runningBalance)}</td></tr>`);
+      rows.push(`<tr><td>${esc(fmtDate(rc.transaction_date || rc.created_at || ""))}</td><td>${esc(rc.transaction_no || rc.reference_no || "RC-" + String(rc.id || ""))}</td><td>Receipt</td><td class="r">—</td><td class="r">${money(amt)}</td><td class="r">${money(runningBalance)}</td></tr>`);
     });
     rows.sort((a, b) => a.localeCompare(b));
     const cust = customer || customerRecord((customer?.id ?? ""));
@@ -684,7 +684,7 @@ function PrintCenter() {
       <div class="lbl">Customer</div>
       <div class="name">${esc(cust.business_name || cust.customer_name || "Customer")}</div>
       <div>${cust.business_address || cust.address ? esc(cust.business_address || cust.address) : ""}</div>
-      <div>${cust.mobile ? "Mobile: " + esc(cust.mobile) : ""}</div>
+      <div>${cust?.mobile ? "Mobile: " + esc(cust.mobile) : ""}</div>
     </div>
     <div class="info-box">
       <div class="info-row"><span>Total Invoices</span><b>${custInvoices.length}</b></div>
@@ -721,15 +721,15 @@ function PrintCenter() {
     const totalDeduction = custInvoices.reduce((s, iv) => s + Number(iv.deduction_amount || 0), 0);
     const totalPending = custInvoices.reduce((s, iv) => s + Number(iv.pending_amount ?? iv.total_amount ?? 0), 0);
     if (custInvoices.length === 0) {
-      alert(`?? Financial Year (${ledgerFY}) ??? ?? customer ?? ??? invoice ???? ????!`);
+      alert(`इस Financial Year (${ledgerFY}) में इस customer का कोई invoice नहीं मिला!`);
       return null;
     }
     const rows: string[] = [];
     if (mode === "complete") {
-      custInvoices.forEach((iv: any) => rows.push(`<tr><td>${esc(fmtDate(iv.invoice_date))}</td><td>${esc(iv.invoice_no)}</td><td>Invoice Bill</td><td class="r">${money(Number(iv.total_amount || 0))}</td><td class="r">&mdash;</td></tr>`));
+      custInvoices.forEach((iv: any) => rows.push(`<tr><td>${esc(fmtDate(iv.invoice_date))}</td><td>${esc(iv.invoice_no)}</td><td>Invoice Bill</td><td class="r">${money(Number(iv.total_amount || 0))}</td><td class="r">—</td></tr>`));
       receiptRows.forEach((rc: any) => {
-        const disc = Number(String(rc.particulars || "").match(/\[Disc:\s*?([\d.]+)\]/i)?.[1] || 0);
-        rows.push(`<tr><td>${esc(fmtDate(rc.transaction_date))}</td><td>${esc(rc.transaction_no || rc.reference_no || "RC-" + String(rc.id || ""))}</td><td>Customer Receipt ${disc ? "/ Discount " + money(disc) : ""}</td><td class="r">&mdash;</td><td class="r">${money(Number(rc.payment_in ?? rc.credit_amount ?? 0))}</td></tr>`);
+        const disc = Number(String(rc.particulars || "").match(/\[Disc:\s*₹([\d.]+)\]/i)?.[1] || 0);
+        rows.push(`<tr><td>${esc(fmtDate(rc.transaction_date))}</td><td>${esc(rc.transaction_no || rc.reference_no || "RC-" + String(rc.id || ""))}</td><td>Customer Receipt ${disc ? "/ Discount " + money(disc) : ""}</td><td class="r">—</td><td class="r">${money(Number(rc.payment_in ?? rc.credit_amount ?? 0))}</td></tr>`);
       });
       rows.sort((a, b) => a.localeCompare(b));
     } else {
@@ -761,7 +761,7 @@ function PrintCenter() {
       <div class="lbl">Customer</div>
       <div class="name">${esc(cust.business_name || cust.customer_name || "Customer")}</div>
       <div>${cust.business_address || cust.address ? esc(cust.business_address || cust.address) : ""}</div>
-      <div>${cust.mobile ? "Mobile: " + esc(cust.mobile) : ""}</div>
+      <div>${cust?.mobile ? "Mobile: " + esc(cust.mobile) : ""}</div>
     </div>
     <div class="info-box">
       ${mode === "complete" ? `
@@ -773,7 +773,7 @@ function PrintCenter() {
       <div class="info-row"><span>Total Bills</span><b>${money(totalBilled)}</b></div>`}
     </div>
   </div>
-  ${rows.length === 0 ? '<div class="notes">?? Financial Year ??? ??? pending bill ???? ???</div>' : `${
+  ${rows.length === 0 ? '<div class="notes">इस Financial Year में कोई pending bill नहीं है।</div>' : `${
       mode === "pending"
         ? `<table style="margin-top:16px">
     <thead>
@@ -781,10 +781,10 @@ function PrintCenter() {
         <th>Invoice No</th>
         <th>Date</th>
         <th>Customer Name</th>
-        <th class="r">Invoice Total (?)</th>
-        <th class="r">Rec. (?)</th>
-        <th class="r">Disc. (?)</th>
-        <th class="r">Pending (?)</th>
+            <th class="r">Invoice Total (₹)</th>
+        <th class="r">Rec. (₹)</th>
+        <th class="r">Disc. (₹)</th>
+            <th class="r">Pending (₹)</th>
         <th class="c">Status</th>
       </tr>
     </thead>
@@ -795,7 +795,7 @@ function PrintCenter() {
       <td class="r">${money(custInvoices.filter((iv: any) => Number(iv.pending_amount ?? iv.total_amount ?? 0) > 0).reduce((s, iv) => s + Number(iv.received_amount || 0), 0))}</td>
       <td class="r">${money(custInvoices.filter((iv: any) => Number(iv.pending_amount ?? iv.total_amount ?? 0) > 0).reduce((s, iv) => s + Number(iv.deduction_amount || 0), 0))}</td>
       <td class="r">${money(custInvoices.filter((iv: any) => Number(iv.pending_amount ?? iv.total_amount ?? 0) > 0).reduce((s, iv) => s + Number(iv.pending_amount ?? 0), 0))}</td>
-      <td class="c">&mdash;</td>
+      <td class="c">—</td>
     </tr>
   </table>`
         : `<table>
@@ -869,7 +869,7 @@ function PrintCenter() {
       (iv: any) => String(iv.invoice_date || "") >= from && String(iv.invoice_date || "") <= to
     );
     if (fyInvoices.length === 0) {
-      alert(`?? Financial Year (${ledgerFY}) ??? ??? invoice ???? ????!`);
+      alert(`इस Financial Year (${ledgerFY}) में कोई invoice नहीं मिला!`);
       return null;
     }
 
@@ -896,14 +896,14 @@ function PrintCenter() {
       r.pending += Number(iv.pending_amount ?? iv.total_amount ?? 0);
     });
 
-    // Sirf un parties ko rakho jinka kuch pending hai &mdash; fully paid (Pending ?0)
+    // Sirf un parties ko rakho jinka kuch pending hai — fully paid (Pending ₹0)
     // wale is "Total Pending Report" me nahi chahiye.
     const partyRows = Array.from(map.values())
       .filter((r: any) => r.pending > 0.00001)
       .sort((a: any, b: any) => b.pending - a.pending);
 
     if (partyRows.length === 0) {
-      alert(`?? Financial Year (${ledgerFY}) ??? ??? pending amount ???? ?? &mdash; ??? bills paid ????`);
+      alert(`इस Financial Year (${ledgerFY}) में कोई pending amount नहीं है — सभी bills paid हैं।`);
       return null;
     }
 
@@ -951,23 +951,23 @@ function PrintCenter() {
         <th class="c">#</th>
         <th>Party Name</th>
         <th class="c">Bills</th>
-        <th class="r">Total Bills (?)</th>
-        <th class="r">Received (?)</th>
-        <th class="r">Disc. (?)</th>
-        <th class="r">Pending (?)</th>
+        <th class="r">Total Bills (₹)</th>
+        <th class="r">Received (₹)</th>
+        <th class="r">Disc. (₹)</th>
+            <th class="r">Pending (₹)</th>
         <th class="c">Status</th>
       </tr>
     </thead>
     <tbody>${rows.join("")}</tbody>
     <tr class="tot-row">
-      <td class="c">&mdash;</td>
+      <td class="c">—</td>
       <td style="text-align:right">Total (${tBills} bills)</td>
       <td class="c">${tBills}</td>
       <td class="r">${money(tBilled)}</td>
       <td class="r">${money(tReceived)}</td>
       <td class="r">${money(tDeduction)}</td>
       <td class="r">${money(tPending)}</td>
-      <td class="c">&mdash;</td>
+      <td class="c">—</td>
     </tr>
   </table>
   <div class="amount-words"><b>Total Pending amount in words:</b> ${numToWords(Math.round(tPending))} Rupees Only</div>
@@ -990,7 +990,7 @@ function PrintCenter() {
     if (activeTab === "ledger" && selectedCustomer) openDoc("Customer Ledger - " + (selectedCustomer.business_name || selectedCustomer.customer_name || ""), printBodyForLedger(selectedCustomer));
   };
 
-  // Bottom bar ka WhatsApp button &mdash; jo bhi tab/record selected hai uska PDF/image bhejo.
+  // Bottom bar ka WhatsApp button — jo bhi tab/record selected hai uska PDF/image bhejo.
   const sendSelectedDocWhatsApp = async (format: "pdf" | "png") => {
     const inr = (v: number) =>
       Number(v || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -1013,10 +1013,10 @@ function PrintCenter() {
       const cust = customers.find((cc) => String(cc.id) === String(inv.customer_id));
       const items = invoiceItems.filter((it) => String(it.invoice_id) === String(inv.id));
       const total = items.length
-        ? items.reduce((s, it) => s + (Number(it.total) || Number(it.quantity || 0) * Number(it.rate || 0)), 0)
+      ? items.reduce((s, it) => s + (Number(it.total) || Number(it.quantity || 0) * Number(it.rate || 0)), 0)
         : Number(inv.total_amount) || 0;
       const invReceipts = receipts.filter((rc) => (rc.customerRefs || []).some((r: any) => String(r.id) === String(inv.id)));
-      const receivedForInv = invReceipts.reduce((s, rc) => s + Number(rc.payment_in ?? rc.credit_amount ?? 0), 0);
+    const receivedForInv = invReceipts.reduce((s, rc) => s + Number(rc.payment_in ?? rc.credit_amount ?? 0), 0);
       const payTerm = cust?.payment_term || "Cash";
       const dueDate = dueDateFromTerm(String(inv.invoice_date || ""), payTerm);
       const outstanding = invoices
@@ -1030,14 +1030,14 @@ function PrintCenter() {
         invoiceNo: String(inv.invoice_no || ""),
         invoiceDate: fmtDate(inv.invoice_date),
         amount: total,
-        dueDate: /10\s*(th|st)?\s*(of)?\s*(every\s+)?next\s*month/i.test(payTerm) ? "Date 10th Of Next Month" : fmtDate(dueDate),
+      dueDate: /10\s*(th|st)?\s*(of)?\s*(every\s+)?next\s*month/i.test(payTerm) ? "Date 10th Of Next Month" : fmtDate(dueDate),
         outstanding,
         companyName: COMPANY.name,
         companyPhone: COMPANY.phone || COMPANY_PHONE,
       });
     } else if (activeTab === "receipt" && selectedReceipt) {
       const refs = selectedReceipt.customerRefs || [];
-      const cust = refs[0] ? customerRecord(refs[0].customer_id) : null;
+    const cust = refs[0] ? customerRecord(refs[0].customer_id) : null;
       const amount = Number(selectedReceipt.payment_in ?? selectedReceipt.credit_amount ?? 0);
       const name = cust?.business_name || cust?.customer_name || (refs[0] ? customerName(refs[0].customer_id) : "Customer");
       title = "Payment Receipt";
@@ -1065,7 +1065,7 @@ function PrintCenter() {
             String(iv.invoice_date || "") >= from &&
             String(iv.invoice_date || "") <= to
         )
-        .reduce((s, iv: any) => s + Number(iv.pending_amount ?? iv.total_amount ?? 0), 0);
+      .reduce((s, iv: any) => s + Number(iv.pending_amount ?? iv.total_amount ?? 0), 0);
       title = "Customer Pending Ledger - " + name;
       body = pendingBody;
       mobile = selectedCustomer.mobile;
@@ -1076,7 +1076,7 @@ function PrintCenter() {
         companyPhone: COMPANY.phone || COMPANY_PHONE,
       });
     } else {
-      alert("Pehle list se koi record select karein (?? Preview par click), phir WhatsApp button dabayein.");
+      alert("Pehle list se koi record select karein (👁 Preview par click), phir WhatsApp button dabayein.");
       return;
     }
 
@@ -1159,7 +1159,7 @@ function PrintCenter() {
         receipts
           .filter((rc: any) => {
             const ref = (rc.customerRefs || [])[0];
-            const pid = ref ? String(ref.customer_id ?? "") : "walkin";
+        const pid = ref ? String(ref.customer_id ?? "") : "walkin";
             return pid === pk;
           })
           .map((rc: any) => ({
@@ -1198,8 +1198,8 @@ function PrintCenter() {
     // ledger tab
     const partyMap = new Map<string, any>();
     invoices.forEach((iv: any) => {
-      const pid = String(iv.customer_id ?? "");
-      const nm = pid ? customerName(iv.customer_id) : "Walk-in Customer";
+        const pid = String(iv.customer_id ?? "");
+        const nm = pid ? customerName(iv.customer_id) : "Walk-in Customer";
       if (!partyMap.has(pid)) partyMap.set(pid, { key: pid, name: nm });
     });
     customers.forEach((c: any) => {
@@ -1225,22 +1225,22 @@ function PrintCenter() {
     const out: any[] = [];
     invoices.forEach((iv: any) => {
       const nm = String(iv.customer_id ?? "") ? customerName(iv.customer_id) : "Walk-in Customer";
-      if ((String(iv.invoice_no || "") + " " + nm).toLowerCase().includes(q)) out.push({ type: "invoice", badge: "INV", label: `${iv.invoice_no} &mdash; ${nm}`, payload: iv });
+      if ((String(iv.invoice_no || "") + " " + nm).toLowerCase().includes(q)) out.push({ type: "invoice", badge: "INV", label: `${iv.invoice_no} — ${nm}`, payload: iv });
     });
     poGroups.forEach((g: any) => {
       const nm = vendorName(g.vendor_id, g.vendor_name);
-      if ((String(g.purchase_no || "") + " " + nm).toLowerCase().includes(q)) out.push({ type: "po", badge: "PO", label: `${g.purchase_no} &mdash; ${nm}`, payload: g });
+      if ((String(g.purchase_no || "") + " " + nm).toLowerCase().includes(q)) out.push({ type: "po", badge: "PO", label: `${g.purchase_no} — ${nm}`, payload: g });
     });
     receipts.forEach((rc: any) => {
       const ref = (rc.customerRefs || [])[0];
-      const nm = ref ? customerName(ref.customer_id) : "Walk-in Customer";
+        const nm = ref ? customerName(ref.customer_id) : "Walk-in Customer";
       const rNo = rc.transaction_no || rc.reference_no || "RC-" + String(rc.id || "");
-      if ((rNo + " " + nm).toLowerCase().includes(q)) out.push({ type: "receipt", badge: "RC", label: `${rNo} &mdash; ${nm}`, payload: rc });
+      if ((rNo + " " + nm).toLowerCase().includes(q)) out.push({ type: "receipt", badge: "RC", label: `${rNo} — ${nm}`, payload: rc });
     });
     payments.forEach((pm: any) => {
       const nm = String(pm.particulars || "").replace(/^Vendor Payment:\s*/i, "").split(/[\(\[]/)[0].trim() || "Supplier";
       const pNo = pm.transaction_no || "PM-" + String(pm.id || "");
-      if ((pNo + " " + nm).toLowerCase().includes(q)) out.push({ type: "payment", badge: "PM", label: `${pNo} &mdash; ${nm}`, payload: pm });
+      if ((pNo + " " + nm).toLowerCase().includes(q)) out.push({ type: "payment", badge: "PM", label: `${pNo} — ${nm}`, payload: pm });
     });
     customers.forEach((c: any) => {
       const nm = c.business_name || c.customer_name || "Customer";
@@ -1292,16 +1292,16 @@ function PrintCenter() {
       <div>
         <div style={{ position: "relative", marginBottom: 14 }}>
           <div style={{ display: "flex", gap: 10, alignItems: "center", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 12, padding: "10px 14px" }}>
-            <span style={{ fontSize: 17 }}>??</span>
+            <span style={{ fontSize: 17 }}>🔍</span>
             <input
               type="text"
               value={quickQuery}
               onChange={(e) => setQuickQuery(e.target.value)}
-              placeholder="Quick search &mdash; Invoice No / PO No / Receipt / Payment / Customer / Vendor name type karo..."
+              placeholder="Quick search — Invoice No / PO No / Receipt / Payment / Customer / Vendor name type karo..."
               style={{ border: "none", outline: "none", background: "transparent", flex: 1, fontSize: 14, color: "#0f172a" }}
             />
             {quickQuery && (
-              <button onClick={() => setQuickQuery("")} style={{ border: "none", background: "transparent", cursor: "pointer", fontSize: 14, color: "#64748b" }}>?</button>
+              <button onClick={() => setQuickQuery("")} style={{ border: "none", background: "transparent", cursor: "pointer", fontSize: 14, color: "#64748b" }}>✕</button>
             )}
           </div>
           {quickResults.length > 0 && (
@@ -1310,7 +1310,7 @@ function PrintCenter() {
                 <button key={i} onClick={() => runQuickResult(r)} style={{ display: "flex", gap: 10, alignItems: "center", width: "100%", textAlign: "left", padding: "11px 14px", border: "none", borderBottom: "1px solid #f1f5f9", background: "#fff", cursor: "pointer", fontSize: 13 }}>
                   <span style={{ background: "#0f172a", color: "#fff", borderRadius: 6, padding: "2px 8px", fontSize: 10, fontWeight: 800, minWidth: 42, textAlign: "center" }}>{r.badge}</span>
                   <span style={{ color: "#0f172a", fontWeight: 600, flex: 1 }}>{r.label}</span>
-                  <span style={{ color: "#0284c7", fontSize: 12 }}>Preview ?</span>
+                  <span style={{ color: "#0284c7", fontSize: 12 }}>Preview →</span>
                 </button>
               ))}
             </div>
@@ -1319,7 +1319,7 @@ function PrintCenter() {
 
         <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 320px) 1fr", gap: 14 }}>
           <div style={boxStyle}>
-            {panelHead(`?? ${activeTab === "invoice" || activeTab === "receipt" || activeTab === "ledger" ? "Customers" : "Vendors"}`, filteredParties.length)}
+            {panelHead(`👥 ${activeTab === "invoice" || activeTab === "receipt" || activeTab === "ledger" ? "Customers" : "Vendors"}`, filteredParties.length)}
             <div style={{ padding: 10, borderBottom: "1px solid #f1f5f9" }}>
               <input type="text" value={partyFilter} onChange={(e) => setPartyFilter(e.target.value)} placeholder="Search party..." style={{ width: "100%", padding: "9px 12px", border: "1px solid #e2e8f0", borderRadius: 9, fontSize: 13, outline: "none", boxSizing: "border-box" }} />
             </div>
@@ -1335,10 +1335,10 @@ function PrintCenter() {
           </div>
 
           <div style={boxStyle}>
-            {panelHead(`?? ${activeTab === "po" ? "Purchase Orders" : activeTab === "invoice" ? "Invoices" : activeTab === "receipt" ? "Receipts" : activeTab === "payment" ? "Payments" : "Ledger"} &mdash; ${activeParty ? activeParty.name : ""}`, filteredRecords.length)}
+            {panelHead(`🧾 ${activeTab === "po" ? "Purchase Orders" : activeTab === "invoice" ? "Invoices" : activeTab === "receipt" ? "Receipts" : activeTab === "payment" ? "Payments" : "Ledger"} — ${activeParty ? activeParty.name : ""}`, filteredRecords.length)}
             {activeTab === "ledger" && (
               <div style={{ display: "flex", gap: 10, alignItems: "center", padding: 10, borderBottom: "1px solid #f1f5f9", flexWrap: "wrap" }}>
-                <span style={{ fontSize: 12, fontWeight: 700, color: "#475569" }}>??</span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: "#475569" }}>📅</span>
                 <select value={ledgerFY} onChange={(e) => setLedgerFY(e.target.value)} style={{ padding: "8px 10px", border: "1px solid #e2e8f0", borderRadius: 9, fontSize: 13, background: "#fff", color: "#0f172a", outline: "none" }}>
                   {fyOptions(7).map((fy) => (
                     <option key={fy} value={fy}>{fy} FY</option>
@@ -1353,7 +1353,7 @@ function PrintCenter() {
                   disabled={allPartyActive}
                   style={{ background: allPartyActive ? "#cbd5e1" : "#0f766e", color: "#fff", border: "none", borderRadius: 9, padding: "9px 14px", fontWeight: 800, fontSize: 12, cursor: allPartyActive ? "not-allowed" : "pointer", opacity: allPartyActive ? 0.7 : 1 }}
                 >
-                  ??? Complete Ledger PDF
+                  🖨️ Complete Ledger PDF
                 </button>
                 <button
                   onClick={() => {
@@ -1364,21 +1364,21 @@ function PrintCenter() {
                   disabled={allPartyActive}
                   style={{ background: allPartyActive ? "#cbd5e1" : "#b91c1c", color: "#fff", border: "none", borderRadius: 9, padding: "9px 14px", fontWeight: 800, fontSize: 12, cursor: allPartyActive ? "not-allowed" : "pointer", opacity: allPartyActive ? 0.7 : 1 }}
                 >
-                  ??? Pending Ledger PDF
+                  🖨️ Pending Ledger PDF
                 </button>
                 <button
                   onClick={() => void sendPendingOutstandingWhatsApp(activeParty, "pdf")}
                   disabled={allPartyActive || sharing !== ""}
                   style={{ background: allPartyActive ? "#cbd5e1" : "#25D366", color: "#fff", border: "none", borderRadius: 9, padding: "9px 14px", fontWeight: 800, fontSize: 12, cursor: allPartyActive || sharing ? "not-allowed" : "pointer", opacity: allPartyActive || sharing ? 0.7 : 1 }}
                 >
-                  {sharing === "pdf" ? "? Preparing..." : "?? WhatsApp PDF"}
+                  {sharing === "pdf" ? "⏳ Preparing..." : "💬 WhatsApp PDF"}
                 </button>
                 <button
                   onClick={() => void sendPendingOutstandingWhatsApp(activeParty, "png")}
                   disabled={allPartyActive || sharing !== ""}
                   style={{ background: allPartyActive ? "#cbd5e1" : "#25D366", color: "#fff", border: "none", borderRadius: 9, padding: "9px 14px", fontWeight: 800, fontSize: 12, cursor: allPartyActive || sharing ? "not-allowed" : "pointer", opacity: allPartyActive || sharing ? 0.7 : 1 }}
                 >
-                  {sharing === "png" ? "? Preparing..." : "?? WhatsApp Image"}
+                  {sharing === "png" ? "⏳ Preparing..." : "💬 WhatsApp Image"}
                 </button>
                 {allPartyActive && (
                   <button
@@ -1388,7 +1388,7 @@ function PrintCenter() {
                     }}
                     style={{ background: "#7c3aed", color: "#fff", border: "none", borderRadius: 9, padding: "9px 14px", fontWeight: 800, fontSize: 12, cursor: "pointer" }}
                   >
-                    ??? Total Pending Report (All Parties)
+                    🖨️ Total Pending Report (All Parties)
                   </button>
                 )}
               </div>
@@ -1406,7 +1406,7 @@ function PrintCenter() {
                     <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>{r.date}</div>
                   </div>
                   <div style={{ fontWeight: 800, fontSize: 13, color: activeTab === "payment" ? "#dc2626" : "#15803d" }}>{money(r.amount)}</div>
-                  <span style={{ background: "#eff6ff", color: "#1d4ed8", borderRadius: 8, padding: "6px 12px", fontSize: 12, fontWeight: 700 }}>?? Preview</span>
+                  <span style={{ background: "#eff6ff", color: "#1d4ed8", borderRadius: 8, padding: "6px 12px", fontSize: 12, fontWeight: 700 }}>👁 Preview</span>
                 </button>
               ))}
             </div>
@@ -1427,8 +1427,8 @@ function PrintCenter() {
     <div style={{ width: "100%" }}>
       <div className="page-title">
         <div>
-          <h1>??? Print Center</h1>
-          <p>Professional print &amp; billing documents &mdash; one click ready</p>
+          <h1>🖨️ Print Center</h1>
+          <p>Professional print &amp; billing documents — one click ready</p>
         </div>
       </div>
 
@@ -1479,21 +1479,21 @@ function PrintCenter() {
                   gap: 8,
                 }}
               >
-                ??? Print {TABS.find((t) => t.key === activeTab)?.label || ""}
+                🖨️ Print {TABS.find((t) => t.key === activeTab)?.label || ""}
               </button>
               <button
                 onClick={() => void sendSelectedDocWhatsApp("pdf")}
                 disabled={!canPrint || sharing !== ""}
                 style={{ background: canPrint ? "#25D366" : "#cbd5e1", color: "#fff", border: "none", padding: "12px 22px", borderRadius: 10, fontWeight: 800, fontSize: 14, cursor: canPrint && !sharing ? "pointer" : "not-allowed", display: "flex", alignItems: "center", gap: 8 }}
               >
-                {sharing === "pdf" ? "? Preparing..." : "?? WhatsApp PDF"}
+                  {sharing === "pdf" ? "⏳ Preparing..." : "💬 WhatsApp PDF"}
               </button>
               <button
                 onClick={() => void sendSelectedDocWhatsApp("png")}
                 disabled={!canPrint || sharing !== ""}
                 style={{ background: canPrint ? "#25D366" : "#cbd5e1", color: "#fff", border: "none", padding: "12px 22px", borderRadius: 10, fontWeight: 800, fontSize: 14, cursor: canPrint && !sharing ? "pointer" : "not-allowed", display: "flex", alignItems: "center", gap: 8 }}
               >
-                {sharing === "png" ? "? Preparing..." : "?? WhatsApp Image"}
+                  {sharing === "png" ? "⏳ Preparing..." : "💬 WhatsApp Image"}
               </button>
             </div>
           </>
