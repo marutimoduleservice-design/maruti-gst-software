@@ -1,7 +1,10 @@
--- Maruti Module Service: Atomic Invoice Save
+-- Maruti Module Service: Atomic Invoice Save (BOM-aware)
 -- Run ONCE in Supabase Dashboard -> SQL Editor.
 -- Wraps invoice + items + stock + job-card close in ONE transaction.
 -- If anything fails, the whole save rolls back (no half-saved invoice).
+-- BOM: when a parent (set/kit) item has rows in item_bom, stock is consumed as
+--      parent ready stock first, remaining qty from its components. The invoice
+--      line always keeps the PARENT item name/id.
 
 drop function if exists public.save_invoice_atomic(text,bigint,date,bigint,bigint,text,numeric,jsonb,jsonb) cascade;
 create or replace function public.save_invoice_atomic(
@@ -30,6 +33,11 @@ declare
   v_diff numeric;
   v_line record;
   v_old_line record;
+  v_comp record;
+  v_stock numeric;
+  v_parent_stock numeric;
+  v_from_parent numeric;
+  v_from_comp numeric;
 begin
   -- CREATE mode: block duplicate invoice for the same job card
   if p_mode = 'create' and p_job_card_id is not null then
@@ -59,22 +67,34 @@ begin
       into v_current_total
       from public.invoices where id = p_editing_invoice_id;
 
-    -- 1) Restore old stock
+    -- 1) Restore old stock (BOM-aware: restore components if parent had BOM)
     for v_old_line in
       select * from jsonb_to_recordset(coalesce(p_old_items, '[]'::jsonb))
         as x(item_id bigint, quantity numeric)
     loop
       if v_old_line.item_id is not null then
         if exists (select 1 from public.item_bom where parent_item_id = v_old_line.item_id) then
-          for v_comp in
-            select b.child_item_id, b.quantity * v_old_line.quantity as need_qty
-            from public.item_bom b
-            where b.parent_item_id = v_old_line.item_id
-          loop
-            update public.items
-               set opening_stock = coalesce(opening_stock, 0) + coalesce(v_comp.need_qty, 0)
-             where id = v_comp.child_item_id;
-          end loop;
+          select coalesce(opening_stock, 0) into v_parent_stock
+            from public.items where id = v_old_line.item_id;
+          -- restore what the parent still has (never negative)
+          update public.items
+             set opening_stock = coalesce(opening_stock, 0) + coalesce(v_old_line.quantity, 0)
+           where id = v_old_line.item_id;
+          -- the rest was consumed from components: restore them too
+          v_from_parent := least(v_parent_stock, coalesce(v_old_line.quantity, 0));
+          v_from_comp := greatest(0, coalesce(v_old_line.quantity, 0) - v_from_parent);
+          if v_from_comp > 0 then
+            for v_comp in
+              select b.child_item_id,
+                     b.quantity * v_from_comp as need_qty
+                from public.item_bom b
+               where b.parent_item_id = v_old_line.item_id
+            loop
+              update public.items
+                 set opening_stock = coalesce(opening_stock, 0) + coalesce(v_comp.need_qty, 0)
+               where id = v_comp.child_item_id;
+            end loop;
+          end if;
         else
           update public.items
              set opening_stock = coalesce(opening_stock, 0) + coalesce(v_old_line.quantity, 0)
@@ -126,7 +146,7 @@ begin
     returning id into v_invoice_id;
   end if;
 
-  -- 5) Insert item lines + deduct spare-part/stock
+  -- 5) Insert item lines + deduct stock (parent first, BOM components for balance)
   for v_line in
     select * from jsonb_to_recordset(coalesce(p_lines, '[]'::jsonb))
       as x(inward_no text, item_id bigint, item_name text, quantity numeric,
@@ -140,20 +160,31 @@ begin
        v_line.item_name, v_line.quantity, v_line.rate, v_line.total, v_line.cost_rate);
 
     if v_line.item_id is not null and v_line.source <> 'Spare Part' then
-      -- Check if item has BOM - if yes, consume components
+      select coalesce(opening_stock, 0) into v_parent_stock
+        from public.items where id = v_line.item_id;
+
       if exists (select 1 from public.item_bom where parent_item_id = v_line.item_id) then
-        -- consume components
-        for v_comp in
-          select b.child_item_id, b.quantity * v_line.quantity as need_qty
-          from public.item_bom b
-          where b.parent_item_id = v_line.item_id
-        loop
-          update public.items
-             set opening_stock = greatest(0, coalesce(opening_stock, 0) - coalesce(v_comp.need_qty, 0))
-           where id = v_comp.child_item_id;
-        end loop;
+        -- Set/kit with BOM: consume own ready stock first, rest from components
+        v_from_parent := least(coalesce(v_parent_stock, 0), coalesce(v_line.quantity, 0));
+        v_from_comp := greatest(0, coalesce(v_line.quantity, 0) - v_from_parent);
+
+        update public.items
+           set opening_stock = greatest(0, coalesce(opening_stock, 0) - v_from_parent)
+         where id = v_line.item_id;
+
+        if v_from_comp > 0 then
+          for v_comp in
+            select b.child_item_id,
+                   b.quantity * v_from_comp as need_qty
+              from public.item_bom b
+             where b.parent_item_id = v_line.item_id
+          loop
+            update public.items
+               set opening_stock = greatest(0, coalesce(opening_stock, 0) - coalesce(v_comp.need_qty, 0))
+             where id = v_comp.child_item_id;
+          end loop;
+        end if;
       else
-        -- consume parent itself
         update public.items
            set opening_stock = greatest(0, coalesce(opening_stock, 0) - coalesce(v_line.quantity, 0))
          where id = v_line.item_id;
