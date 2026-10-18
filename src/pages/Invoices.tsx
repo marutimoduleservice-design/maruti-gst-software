@@ -807,9 +807,7 @@ if (repStats.pending > 0) {
       : Number(inv.total_amount) || 0;
     const payTerm = customer?.payment_term || "Cash";
     const dueDate = dueDateFromTerm(String(inv.invoice_date || ""), payTerm);
-    const dueDateLabel = /10\s*(th|st)?\s*(of)?\s*(every\s+)?next\s*month/i.test(payTerm)
-      ? "Date 10th Of Next Month"
-      : fmtDate(dueDate);
+    const dueDateLabel = fmtDate(dueDate);
     const message = buildSalesInvoiceWhatsAppMessage({
       customerName: customer?.business_name || customer?.customer_name || "Customer",
       invoiceNo: String(inv.invoice_no || ""),

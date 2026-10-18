@@ -66,16 +66,34 @@ export const esc = (v: unknown): string =>
 export const money = (v: unknown): string =>
   `₹ ${Number(v || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+/** Payment term "10th Of Every Next Month" ya uske kisi bhi variant ko match karta hai. */
+export const isTenthNextMonthTerm = (term: unknown): boolean =>
+  /10\s*(th|st)?\s*(of)?\s*(every\s+)?\s*next\s*month/i.test(String(term || ""));
+
 export const dueDateFromTerm = (invoiceDate: string, term: string): string => {
-  const d = new Date(invoiceDate + "T00:00:00");
-  if (isNaN(d.getTime())) return invoiceDate;
+  const s = String(invoiceDate || "").slice(0, 10);
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return s;
+  let year = Number(m[1]);
+  let month = Number(m[2]); // 1-12
+  const day = Number(m[3]);
   const days = String(term || "").match(/(\d+)\s*Days/i);
   if (days) {
-    d.setDate(d.getDate() + Number(days[1]));
-  } else if (/10\s*(th|st)?\s*(of)?\s*(every\s+)?next\s*month/i.test(String(term || ""))) {
-    d.setMonth(d.getMonth() + 1, 10);
+    const d = new Date(year, month - 1, day + Number(days[1]));
+    year = d.getFullYear();
+    month = d.getMonth() + 1;
+    return `${year}-${String(month).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   }
-  return d.toISOString().slice(0, 10);
+  if (isTenthNextMonthTerm(term)) {
+    // Invoice date ke month ke agle month ki 10 tareekh (chahe aaj kitni bhi date ho).
+    month += 1;
+    if (month > 12) {
+      month = 1;
+      year += 1;
+    }
+    return `${year}-${String(month).padStart(2, "0")}-10`;
+  }
+  return s;
 };
 
 export const numToWords = (num: number): string => {
@@ -534,7 +552,7 @@ export const buildSalesInvoiceBody = async (params: {
       <div class="info-row"><span>Invoice No</span><b>${esc(inv.invoice_no || "-")}</b></div>
       <div class="info-row"><span>Invoice Date</span><b>${esc(fmtDate(inv.invoice_date))}</b></div>
       <div class="info-row"><span>Payment Status</span><b style="color:${invStatus === "Paid" ? "#15803d" : "#dc2626"}">${esc(invStatus)}</b></div>
-      <div class="info-row"><span>Due Date</span><b>${/10\s*(th|st)?\s*(of)?\s*(every\s+)?next\s*month/i.test(payTerm) ? "Date 10th Of Next Month" : esc(fmtDate(dueDate))}</b></div>
+      <div class="info-row"><span>Due Date</span><b>${esc(fmtDate(dueDate))}</b></div>
       <div class="info-row"><span>Total Amount</span><b>${money(total)}</b></div>
     </div>
   </div>
