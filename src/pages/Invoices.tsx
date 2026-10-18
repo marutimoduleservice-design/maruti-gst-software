@@ -1,5 +1,5 @@
 import { sc, getCompanyId } from "../lib/company";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { fmtDate } from "../lib/formatDate";
 import { SortTh, useSortedRows } from "../lib/tableSort";
@@ -102,6 +102,7 @@ function Invoices() {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [purchaseStock, setPurchaseStock] = useState<PurchaseItem[]>([]);
   const [masterItems, setMasterItems] = useState<ItemMaster[]>([]);
+  const [itemBoms, setItemBoms] = useState<{ parent_item_id: number; child_item_id: number; quantity: number }[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [openJobCards, setOpenJobCards] = useState<JobCard[]>([]);
   const [soldByPurchaseLine, setSoldByPurchaseLine] = useState<Record<string, number>>({});
@@ -158,6 +159,24 @@ const [invoicedQtyByJob, setInvoicedQtyByJob] = useState<Record<string, number>>
       return;
     }
     const [invRes, purchaseRes, itemRes, custRes, jobRes, invoiceItemsRes, priceRes, compRes] = results;
+
+    // BOM (set/kit) mapping. Migration na chali ho to feature off, app phir bhi chale.
+    let bomRows: { parent_item_id: number; child_item_id: number; quantity: number }[] = [];
+    try {
+      const bomRes = await sc("item_bom").select("parent_item_id, child_item_id, quantity");
+      if (!bomRes.error && bomRes.data) {
+        bomRows = (bomRes.data as any[])
+          .map((b) => ({
+            parent_item_id: Number(b.parent_item_id),
+            child_item_id: Number(b.child_item_id),
+            quantity: Number(b.quantity) || 1,
+          }))
+          .filter((b) => b.parent_item_id && b.child_item_id);
+      }
+    } catch {
+      bomRows = [];
+    }
+    setItemBoms(bomRows);
 
     const compRow = compRes?.data?.[0];
     if (compRow) {
@@ -268,6 +287,28 @@ const [invoicedQtyByJob, setInvoicedQtyByJob] = useState<Record<string, number>>
       });
 
       setPurchaseStock(stockRows);
+
+      // BOM parents ke liye virtual "BOM-SET" row — chahe unka apna stock 0 ho,
+      // components se ban sakta hai to dropdown me dikhega.
+      const parentIdsWithBom = Array.from(new Set(bomRows.map((b) => b.parent_item_id)));
+      parentIdsWithBom.forEach((pid) => {
+        const item = masterRows.find((mi) => Number(mi.id) === pid);
+        if (!item) return;
+        const alreadyListed = stockRows.some(
+          (row) => Number(row.item_id) === pid && row.inward_no !== "BOM-SET",
+        );
+        if (alreadyListed) return;
+        stockRows.push({
+          id: -Math.abs(pid + 900000), // negative id: real inward se collide nahi hoga
+          inward_no: "BOM-SET",
+          item_id: pid,
+          item_name: String(item.item_name || ""),
+          item_code: item.item_code || "",
+          quantity: 0, // actual available getStockRowAvailable se niklega
+          purchase_rate: Number(item.purchase_price || 0) || Number(item.cost_price || 0),
+          item_master: item,
+        });
+      });
     }
     setMasterItems(masterRows);
     if (custRes.data) setCustomers(customerRows);
@@ -491,6 +532,73 @@ if (repStats.pending > 0) {
   const getPurchaseOptionValue = (purchase: Pick<PurchaseItem, "id" | "inward_no" | "item_code" | "item_name">) =>
     `${String(purchase.inward_no || "").trim().toLowerCase()}|${String(purchase.item_name || "").trim().toLowerCase()}`;
 
+  // item_bom se parent -> children mapping (set/kit).
+  const bomChildrenByParent = useMemo(() => {
+    const m = new Map<number, { childId: number; qty: number }[]>();
+    itemBoms.forEach((b) => {
+      const arr = m.get(b.parent_item_id) || [];
+      const q = b.quantity > 0 ? b.quantity : 1;
+      arr.push({ childId: b.child_item_id, qty: q });
+      m.set(b.parent_item_id, arr);
+    });
+    return m;
+  }, [itemBoms]);
+
+  // Ek child ka available stock = uske apne inward/opening batches se bikri
+  // hui qty minus, aur doosri SET lines ke through is child ki consumption minus.
+  const getBomChildAvailable = (
+    childId: number,
+    excludeLineId?: string,
+    lines: LineItem[] = lineItems,
+  ): number => {
+    const rows = purchaseStock.filter(
+      (r) => Number(r.item_id) === childId && r.inward_no !== "BOM-SET",
+    );
+    const total = rows.reduce((s, r) => s + getAvailablePurchaseQty(r, excludeLineId, lines), 0);
+    let consumedByOtherSets = 0;
+    lines.forEach((line) => {
+      if (line.id === excludeLineId) return;
+      if (line.source !== "Spare Part") return;
+      const kids = bomChildrenByParent.get(Number(line.item_id));
+      if (!kids) return;
+      const k = kids.find((x) => x.childId === childId);
+      if (k) consumedByOtherSets += (Number(line.quantity) || 0) * k.qty;
+    });
+    return Math.max(0, total - consumedByOtherSets);
+  };
+
+  // SET/kit ka available = apna ready stock + components se ban sakta hai.
+  const getBomParentAvailable = (
+    parentId: number,
+    excludeLineId?: string,
+    lines: LineItem[] = lineItems,
+  ): number => {
+    const own = purchaseStock
+      .filter((r) => Number(r.item_id) === parentId && r.inward_no !== "BOM-SET")
+      .reduce((s, r) => s + getAvailablePurchaseQty(r, excludeLineId, lines), 0);
+    const children = bomChildrenByParent.get(parentId);
+    if (!children || children.length === 0) return own;
+    let buildable = Infinity;
+    for (const c of children) {
+      const childAvail = getBomChildAvailable(c.childId, excludeLineId, lines);
+      buildable = Math.min(buildable, Math.floor(childAvail / c.qty));
+    }
+    if (!Number.isFinite(buildable) || buildable < 0) buildable = 0;
+    return own + buildable;
+  };
+
+  // Har stock row ke liye available: BOM-SET row ho to BOM logic, warna normal.
+  const getStockRowAvailable = (
+    row: PurchaseItem,
+    excludeLineId?: string,
+    lines: LineItem[] = lineItems,
+  ): number => {
+    if (row.inward_no === "BOM-SET" && row.item_id) {
+      return getBomParentAvailable(Number(row.item_id), excludeLineId, lines);
+    }
+    return getAvailablePurchaseQty(row, excludeLineId, lines);
+  };
+
   // Qty of a "JOB-*" module type already invoiced on a job card.
 // While editing, that invoice's own qty is excluded because its lines get replaced.
   const getInvoicedQty = (jobId: number, inwardNo: string, excludeInvoiceId?: number | null) => {
@@ -595,7 +703,7 @@ if (repStats.pending > 0) {
                 String(ps.id) === String(value) || getPurchaseOptionValue(ps) === String(value) || String(ps.inward_no) === String(value)
               );
               if (foundStock) {
-                const availableQty = getAvailablePurchaseQty(foundStock, id);
+                const availableQty = getStockRowAvailable(foundStock, id);
                 updatedLine.inward_no = foundStock.inward_no;
                 updatedLine.purchase_line_id = foundStock.id;
                 updatedLine.item_id = String(foundStock.item_id || "");
@@ -641,7 +749,7 @@ if (repStats.pending > 0) {
                     String(ps.item_name || "").trim().toLowerCase() === String(updatedLine.item_name || "").trim().toLowerCase()
                 );
               const liveAvailable = stockRow
-                ? getAvailablePurchaseQty(stockRow, id, prev)
+                ? getStockRowAvailable(stockRow, id, prev)
                 : Number(updatedLine.max_stock || 0);
               updatedLine.max_stock = liveAvailable;
               if (qty > liveAvailable) {
@@ -746,11 +854,17 @@ if (repStats.pending > 0) {
           );
           const lineQty = Number(it.quantity || 0);
           // Available = inward stock − doosron ka sold − is invoice ki baaki lines.
-          const soldByOthers = Math.max(0, Number(soldByPurchaseLine[lineKey] || 0) - Number(ownSavedByKey[lineKey] || 0));
-          const ownOtherLines = Math.max(0, Number(ownSavedByKey[lineKey] || 0) - lineQty);
-          const computedMax = matchedStock
-            ? Math.max(0, Number(matchedStock.quantity || 0) - soldByOthers - ownOtherLines)
-            : 0;
+          // BOM-SET row ho to components se mil kar available nikalo.
+          let computedMax: number;
+          if (matchedStock && matchedStock.inward_no === "BOM-SET" && matchedStock.item_id) {
+            computedMax = getBomParentAvailable(Number(matchedStock.item_id), undefined, []);
+          } else {
+            const soldByOthers = Math.max(0, Number(soldByPurchaseLine[lineKey] || 0) - Number(ownSavedByKey[lineKey] || 0));
+            const ownOtherLines = Math.max(0, Number(ownSavedByKey[lineKey] || 0) - lineQty);
+            computedMax = matchedStock
+              ? Math.max(0, Number(matchedStock.quantity || 0) - soldByOthers - ownOtherLines)
+              : 0;
+          }
           return {
             id: Math.random().toString(),
             source: isJobLine ? (it.inward_no === "JOB-REP" ? "Repairing" : it.inward_no === "JOB-WAR" ? "Warranty" : "Reject") : "Spare Part",
@@ -934,6 +1048,17 @@ const handleDeleteInvoice = async (inv: Invoice) => {
     if (exceeded) {
       const availableQty = Math.max(0, (purchasedByKey[exceeded[0]] || 0) - (soldByKey[exceeded[0]] || 0));
       throw new Error(`Stock available sirf ${availableQty} hai. Isse zyada spare quantity ka invoice nahi ban sakta.`);
+    }
+
+    // BOM-SET (kit/set) lines: components ke available stock se check karo.
+    for (const line of lineItems) {
+      if (line.source !== "Spare Part" || line.inward_no !== "BOM-SET" || !line.item_id) continue;
+      const parentAvail = getBomParentAvailable(Number(line.item_id), line.id);
+      if (Number(line.quantity || 0) > parentAvail) {
+        throw new Error(
+          `"${line.item_name}" ka stock available sirf ${parentAvail} hai (apna ready stock + components). Isse zyada quantity ka invoice nahi ban sakta.`,
+        );
+      }
     }
   };
 
