@@ -67,6 +67,22 @@ function Stock() {
       const { data: purchaseData } = await sc("purchases")
         .select("inward_no, item_name, item_code, quantity, rate");
 
+      // 2b. BOM Assembly — optional table (migration na chali ho to feature off)
+      let assemblyData: any[] = [];
+      let assemblyItemsData: any[] = [];
+      try {
+        const [asmRes, asmItemRes] = await Promise.all([
+          sc("bom_assemblies").select("assembly_no, set_item_id, set_item_name, set_item_code, set_quantity, set_rate"),
+          sc("bom_assembly_items").select("component_item_id, component_item_name, component_item_code, component_inward_no, quantity")
+        ]);
+        if (!asmRes.error && asmRes.data) assemblyData = asmRes.data as any[];
+        if (!asmItemRes.error && asmItemRes.data) assemblyItemsData = asmItemRes.data as any[];
+      } catch (e) {
+        console.log("BOM assembly fetch skipped:", e);
+        assemblyData = [];
+        assemblyItemsData = [];
+      }
+
       // 3. Fetch All Sales / Invoices (Outward Stock)
       let { data: invoiceItemsData } = await sc("invoice_items")
         .select("inward_no, item_name, quantity");
@@ -126,6 +142,49 @@ function Stock() {
           };
           inwardByItemId[matched.id] = (inwardByItemId[matched.id] || 0) + qty;
         }
+      });
+
+      // BOM Assembly (INWARD) - naya SET stock ban ta hai (inward_no = assembly_no),
+      // isliye isko sales se pehle process karna zaroori hai.
+      assemblyData.forEach((asm: any) => {
+        const qty = Number(asm.set_quantity || 0);
+        const rate = Number(asm.set_rate || 0);
+        const inwNo = String(asm.assembly_no || "").trim();
+        if (qty <= 0 || !inwNo) return;
+
+        const matched =
+          findItem(asm.set_item_name, asm.set_item_code) ||
+          allItems.find((it) => Number(it.id) === Number(asm.set_item_id));
+        if (!matched) return;
+
+        const key = inwardKey(inwNo, matched.id);
+        const prev = inwardMap[key] || { qty: 0, rate: 0, value: 0 };
+        inwardMap[key] = {
+          qty: prev.qty + qty,
+          rate: rate > 0 ? rate : prev.rate,
+          value: prev.value + qty * rate,
+        };
+        inwardByItemId[matched.id] = (inwardByItemId[matched.id] || 0) + qty;
+      });
+
+      // Assembly consumption (OUTWARD) - component ka inward batch kat ta hai
+      assemblyItemsData.forEach((row: any) => {
+        const qty = Number(row.quantity || 0);
+        if (qty <= 0) return;
+
+        const matched = findItem(row.component_item_name, row.component_item_code);
+        if (!matched) return;
+
+        outwardByItemId[matched.id] = (outwardByItemId[matched.id] || 0) + qty;
+        const inwNo = String(row.component_inward_no || "").trim();
+        if (!inwNo) return;
+
+        const entry = inwardMap[inwardKey(inwNo, matched.id)];
+        if (!entry) return;
+        const before = entry.qty;
+        const used = Math.min(qty, before);
+        entry.qty = Math.max(0, before - used);
+        entry.value = before > 0 ? entry.value * (entry.qty / before) : 0;
       });
 
       // Calculate Job Cards (INWARD for Modules) - Job Card aane par stock IN hoga

@@ -46,6 +46,7 @@ const ALL_MENUS: string[] = [
   "Module Repair",
   "Sales / Invoice",
   "Purchase",
+  "BOM Assembly",
   "Payments / Ledger",
   "Bank Passbook & Expenses",
   "Warranty",
@@ -80,6 +81,7 @@ const ACCESS: Record<StaffRole, string[]> = {
     "Dashboard",
     "Sales / Invoice",
     "Purchase",
+    "BOM Assembly",
     "Payments / Ledger",
     "Bank Passbook & Expenses",
     "Print Center",
@@ -95,6 +97,7 @@ const ACCESS: Record<StaffRole, string[]> = {
   // Store person: sirf Purchase + Stock (Item Master, labels, vendor).
   store: [
     "Purchase",
+    "BOM Assembly",
     "Item Master",
     "Label Print",
     "Vendor Master",

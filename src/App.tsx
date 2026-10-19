@@ -22,6 +22,7 @@ import Customers from "./pages/Customers";
 import JobCards from "./pages/JobCards";
 import Invoices from "./pages/Invoices";
 import Purchase from "./pages/Purchase";
+import BomAssembly from "./pages/BomAssembly";
 import PaymentsLedger from "./pages/PaymentsLedger";
 import BankPassbook from "./pages/BankPassbook";
 import Warranty from "./pages/Warranty";
@@ -54,6 +55,7 @@ const mainMenuItems: MenuItem[] = [
   { name: "Module Repair", icon: "🔧" },
   { name: "Sales / Invoice", icon: "🧾" },
   { name: "Purchase", icon: "📦" },
+  { name: "BOM Assembly", icon: "🧩" },
   { name: "Payments / Ledger", icon: "₹" },
   { name: "Bank Passbook & Expenses", icon: "💰" },
   { name: "Warranty", icon: "🛡" },
@@ -354,7 +356,7 @@ function App() {
     try {
       setLoading(true);
 
-      const [jobsRes, invoicesRes, purchasesRes, bankRes, customersRes, itemsRes, invoiceItemsRes] = await Promise.all([
+      const [jobsRes, invoicesRes, purchasesRes, bankRes, customersRes, itemsRes, invoiceItemsRes, asmRes, asmItemRes] = await Promise.all([
         sc("job_cards").select("*"),
         sc("invoices").select("id, invoice_no, invoice_date, total_amount, customer_id"),
         sc("purchases").select("id, inward_no, item_name, quantity, rate, total_amount, vendor_name, created_at"),
@@ -362,6 +364,8 @@ function App() {
         sc("customers").select("id, customer_name, business_name"),
         sc("items").select("id, item_code, item_name, opening_stock, purchase_price, cost_price, min_stock"),
         sc("invoice_items").select("*"),
+        sc("bom_assemblies").select("assembly_no, set_item_id, set_item_name, set_item_code, set_quantity, set_rate"),
+        sc("bom_assembly_items").select("component_item_id, component_item_name, component_item_code, component_inward_no, quantity")
       ]);
 
       const jobCards = jobsRes.data || [];
@@ -373,6 +377,9 @@ function App() {
       const customerRows = customersRes.data || [];
       const allItems = itemsRes.data || [];
       const invoiceItems = invoiceItemsRes.data || [];
+      // BOM assembly tables optional hain (migration na chali ho to data null)
+      const assemblies = (asmRes.data || []) as any[];
+      const assemblyItems = (asmItemRes.data || []) as any[];
 
       const customerById = new Map<number, string>(
         customerRows.map((c: any) => [Number(c.id), c.business_name || c.customer_name || ""])
@@ -468,6 +475,28 @@ function App() {
         }
       });
 
+      // BOM Assembly: naya SET inward banata hai, components ki qty outward jati hai.
+      assemblies.forEach((asm: any) => {
+        const item = allItems.find((it) =>
+          (asm.set_item_code && it.item_code && String(asm.set_item_code).toLowerCase() === String(it.item_code).toLowerCase()) ||
+          (asm.set_item_name && it.item_name && String(asm.set_item_name).toLowerCase() === String(it.item_name).toLowerCase()) ||
+          Number(it.id) === Number(asm.set_item_id)
+        );
+        const inw = String(asm.assembly_no || "").trim();
+        if (item && inw) {
+          const key = inwardKey(inw, item.id);
+          inwardMap[key] = { qty: (inwardMap[key]?.qty || 0) + Number(asm.set_quantity || 0), rate: Number(asm.set_rate || 0) > 0 ? Number(asm.set_rate || 0) : (inwardMap[key]?.rate || 0) };
+        }
+      });
+      assemblyItems.forEach((row: any) => {
+        const item = allItems.find((it) =>
+          (row.component_item_code && it.item_code && String(row.component_item_code).toLowerCase() === String(it.item_code).toLowerCase()) ||
+          (row.component_item_name && it.item_name && String(row.component_item_name).toLowerCase() === String(it.item_name).toLowerCase()) ||
+          Number(it.id) === Number(row.component_item_id)
+        );
+        if (item) outwardByItem[item.id] = (outwardByItem[item.id] || 0) + Number(row.quantity || 0);
+      });
+
       invoiceItems.forEach((inv: any) => {
         const item = allItems.find((it) =>
           (inv.item_code && it.item_code && String(inv.item_code).toLowerCase() === String(it.item_code).toLowerCase()) ||
@@ -480,7 +509,7 @@ function App() {
       // Pehle yahan har inward ka poora qty x rate add hota tha, isliye beche gaye
       // stock ke baad bhi value poora dikhta tha (189129 vs 6876.31).
       // Ab wahi shared logic use ho raha hai jo Stock Report page chalata hai.
-      const stockValue = computeStockValue({ items: allItems, purchases, lines: invoiceItems, jobs: jobCards });
+      const stockValue = computeStockValue({ items: allItems, purchases, lines: invoiceItems, jobs: jobCards, assemblies, assemblyItems });
 
       const lowStockItems = allItems.filter((it) => {
         const opening = Number(it.opening_stock || 0);
@@ -827,6 +856,7 @@ function App() {
       );
     if (activeMenu === "Sales / Invoice") return <Invoices />;
     if (activeMenu === "Purchase") return <Purchase />;
+    if (activeMenu === "BOM Assembly") return <BomAssembly />;
     if (activeMenu === "Payments / Ledger") return <PaymentsLedger />;
     if (activeMenu === "Bank Passbook & Expenses") return <BankPassbook />;
     if (activeMenu === "Warranty") return <Warranty />;

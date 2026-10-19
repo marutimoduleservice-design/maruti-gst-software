@@ -1,5 +1,5 @@
 import { sc, getCompanyId } from "../lib/company";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { fmtDate } from "../lib/formatDate";
 import { SortTh, useSortedRows } from "../lib/tableSort";
@@ -102,7 +102,9 @@ function Invoices() {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [purchaseStock, setPurchaseStock] = useState<PurchaseItem[]>([]);
   const [masterItems, setMasterItems] = useState<ItemMaster[]>([]);
-  const [itemBoms, setItemBoms] = useState<{ parent_item_id: number; child_item_id: number; quantity: number }[]>([]);
+  // BOM Assembly ne component ke kis inward batch se kitna stock kha liya.
+  // Isko component ki available qty se minus karna padta hai (warna oversell).
+  const [bomConsumedByLine, setBomConsumedByLine] = useState<Record<string, number>>({});
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [openJobCards, setOpenJobCards] = useState<JobCard[]>([]);
   const [soldByPurchaseLine, setSoldByPurchaseLine] = useState<Record<string, number>>({});
@@ -152,31 +154,28 @@ const [invoicedQtyByJob, setInvoicedQtyByJob] = useState<Record<string, number>>
         sc("job_cards").select("id, job_no, status, customer_id, repairing_quantity, warranty_quantity, reject_quantity").order("id", { ascending: false }),
         sc("invoice_items").select("invoice_id, inward_no, item_name, quantity"),
         sc("customer_item_prices").select("*"),
-        sc("company_settings").select("*").limit(1)
+        sc("company_settings").select("*").limit(1),
+        sc("bom_assemblies").select("*"),
+        sc("bom_assembly_items").select("component_inward_no, component_item_name, quantity")
       ]);
     } catch {
       setLoading(false);
       return;
     }
-    const [invRes, purchaseRes, itemRes, custRes, jobRes, invoiceItemsRes, priceRes, compRes] = results;
+    const [invRes, purchaseRes, itemRes, custRes, jobRes, invoiceItemsRes, priceRes, compRes, asmRes, asmItemRes] = results;
 
-    // BOM (set/kit) mapping. Migration na chali ho to feature off, app phir bhi chale.
-    let bomRows: { parent_item_id: number; child_item_id: number; quantity: number }[] = [];
-    try {
-      const bomRes = await sc("item_bom").select("parent_item_id, child_item_id, quantity");
-      if (!bomRes.error && bomRes.data) {
-        bomRows = (bomRes.data as any[])
-          .map((b) => ({
-            parent_item_id: Number(b.parent_item_id),
-            child_item_id: Number(b.child_item_id),
-            quantity: Number(b.quantity) || 1,
-          }))
-          .filter((b) => b.parent_item_id && b.child_item_id);
-      }
-    } catch {
-      bomRows = [];
-    }
-    setItemBoms(bomRows);
+    // BOM assembly ki consumption (batch wise) - component ki available qty me se
+    // ye minus hoti hai. Migration na chali ho to table hi nahi milegi, feature off.
+    const bomConsumed: Record<string, number> = {};
+    (asmItemRes?.data || []).forEach((row: any) => {
+      const key = getPurchaseLineKey({
+        inward_no: String(row.component_inward_no || ""),
+        item_code: "",
+        item_name: String(row.component_item_name || ""),
+      });
+      bomConsumed[key] = (bomConsumed[key] || 0) + Number(row.quantity || 0);
+    });
+    setBomConsumedByLine(bomConsumed);
 
     const compRow = compRes?.data?.[0];
     if (compRow) {
@@ -288,25 +287,33 @@ const [invoicedQtyByJob, setInvoicedQtyByJob] = useState<Record<string, number>>
 
       setPurchaseStock(stockRows);
 
-      // BOM parents ke liye virtual "BOM-SET" row — chahe unka apna stock 0 ho,
-      // components se ban sakta hai to dropdown me dikhega.
-      const parentIdsWithBom = Array.from(new Set(bomRows.map((b) => b.parent_item_id)));
-      parentIdsWithBom.forEach((pid) => {
-        const item = masterRows.find((mi) => Number(mi.id) === pid);
-        if (!item) return;
+      // BOM Assembly se bana SET — ek asli inward row ki tarah dikhao (naye INW ke saath).
+      // Ab set ka stock asli hota hai, isliye virtual "BOM-SET" rows ki zaroorat nahi.
+      (asmRes?.data || []).forEach((asm: any) => {
+        const setQty = Number(asm.set_quantity || 0);
+        if (setQty <= 0) return;
+        const setName = String(asm.set_item_name || "");
+        const setCode = String(asm.set_item_code || "");
         const alreadyListed = stockRows.some(
-          (row) => Number(row.item_id) === pid && row.inward_no !== "BOM-SET",
+          (row) =>
+            String(row.inward_no || "").trim().toLowerCase() ===
+            String(asm.assembly_no || "").trim().toLowerCase(),
         );
         if (alreadyListed) return;
+        const setItem = masterRows.find(
+          (mi) =>
+            (setCode && mi.item_code && String(mi.item_code).toLowerCase() === setCode.toLowerCase()) ||
+            (setName && mi.item_name && String(mi.item_name).trim().toLowerCase() === setName.trim().toLowerCase()),
+        );
         stockRows.push({
-          id: -Math.abs(pid + 900000), // negative id: real inward se collide nahi hoga
-          inward_no: "BOM-SET",
-          item_id: pid,
-          item_name: String(item.item_name || ""),
-          item_code: item.item_code || "",
-          quantity: 0, // actual available getStockRowAvailable se niklega
-          purchase_rate: Number(item.purchase_price || 0) || Number(item.cost_price || 0),
-          item_master: item,
+          id: -Math.abs(Number(asm.id) || 1) - 700000, // negative id: real inward se kabhi collide nahi hoga
+          inward_no: String(asm.assembly_no || ""),
+          item_id: Number(asm.set_item_id || setItem?.id || 0),
+          item_name: setName || String(setItem?.item_name || "Set"),
+          item_code: setCode || setItem?.item_code || "",
+          quantity: setQty,
+          purchase_rate: Number(asm.set_rate || 0),
+          item_master: setItem,
         });
       });
     }
@@ -523,81 +530,23 @@ if (repStats.pending > 0) {
     return soldByOthers + ownOthersCurrent;
   };
 
+  // Available = inward qty − doosron ka sold − BOM assembly ki consumption.
+  // Assembly components ko unke inward batch se kha chuki hoti hai, isliye wo
+  // batch bhi isi jagah minus hota hai (warna same stock dobara bik jata).
   const getAvailablePurchaseQty = (
     purchase: PurchaseItem,
     excludeLineId?: string,
     lines: LineItem[] = lineItems,
-  ) => Math.max(0, Number(purchase.quantity || 0) - getSoldByOthers(purchase, excludeLineId, lines));
+  ) => {
+    const consumedByAssembly = Number(bomConsumedByLine[getPurchaseLineKey(purchase)] || 0);
+    return Math.max(
+      0,
+      Number(purchase.quantity || 0) - getSoldByOthers(purchase, excludeLineId, lines) - consumedByAssembly,
+    );
+  };
 
   const getPurchaseOptionValue = (purchase: Pick<PurchaseItem, "id" | "inward_no" | "item_code" | "item_name">) =>
     `${String(purchase.inward_no || "").trim().toLowerCase()}|${String(purchase.item_name || "").trim().toLowerCase()}`;
-
-  // item_bom se parent -> children mapping (set/kit).
-  const bomChildrenByParent = useMemo(() => {
-    const m = new Map<number, { childId: number; qty: number }[]>();
-    itemBoms.forEach((b) => {
-      const arr = m.get(b.parent_item_id) || [];
-      const q = b.quantity > 0 ? b.quantity : 1;
-      arr.push({ childId: b.child_item_id, qty: q });
-      m.set(b.parent_item_id, arr);
-    });
-    return m;
-  }, [itemBoms]);
-
-  // Ek child ka available stock = uske apne inward/opening batches se bikri
-  // hui qty minus, aur doosri SET lines ke through is child ki consumption minus.
-  const getBomChildAvailable = (
-    childId: number,
-    excludeLineId?: string,
-    lines: LineItem[] = lineItems,
-  ): number => {
-    const rows = purchaseStock.filter(
-      (r) => Number(r.item_id) === childId && r.inward_no !== "BOM-SET",
-    );
-    const total = rows.reduce((s, r) => s + getAvailablePurchaseQty(r, excludeLineId, lines), 0);
-    let consumedByOtherSets = 0;
-    lines.forEach((line) => {
-      if (line.id === excludeLineId) return;
-      if (line.source !== "Spare Part") return;
-      const kids = bomChildrenByParent.get(Number(line.item_id));
-      if (!kids) return;
-      const k = kids.find((x) => x.childId === childId);
-      if (k) consumedByOtherSets += (Number(line.quantity) || 0) * k.qty;
-    });
-    return Math.max(0, total - consumedByOtherSets);
-  };
-
-  // SET/kit ka available = apna ready stock + components se ban sakta hai.
-  const getBomParentAvailable = (
-    parentId: number,
-    excludeLineId?: string,
-    lines: LineItem[] = lineItems,
-  ): number => {
-    const own = purchaseStock
-      .filter((r) => Number(r.item_id) === parentId && r.inward_no !== "BOM-SET")
-      .reduce((s, r) => s + getAvailablePurchaseQty(r, excludeLineId, lines), 0);
-    const children = bomChildrenByParent.get(parentId);
-    if (!children || children.length === 0) return own;
-    let buildable = Infinity;
-    for (const c of children) {
-      const childAvail = getBomChildAvailable(c.childId, excludeLineId, lines);
-      buildable = Math.min(buildable, Math.floor(childAvail / c.qty));
-    }
-    if (!Number.isFinite(buildable) || buildable < 0) buildable = 0;
-    return own + buildable;
-  };
-
-  // Har stock row ke liye available: BOM-SET row ho to BOM logic, warna normal.
-  const getStockRowAvailable = (
-    row: PurchaseItem,
-    excludeLineId?: string,
-    lines: LineItem[] = lineItems,
-  ): number => {
-    if (row.inward_no === "BOM-SET" && row.item_id) {
-      return getBomParentAvailable(Number(row.item_id), excludeLineId, lines);
-    }
-    return getAvailablePurchaseQty(row, excludeLineId, lines);
-  };
 
   // Qty of a "JOB-*" module type already invoiced on a job card.
 // While editing, that invoice's own qty is excluded because its lines get replaced.
@@ -703,7 +652,7 @@ if (repStats.pending > 0) {
                 String(ps.id) === String(value) || getPurchaseOptionValue(ps) === String(value) || String(ps.inward_no) === String(value)
               );
               if (foundStock) {
-                const availableQty = getStockRowAvailable(foundStock, id);
+                const availableQty = getAvailablePurchaseQty(foundStock, id);
                 updatedLine.inward_no = foundStock.inward_no;
                 updatedLine.purchase_line_id = foundStock.id;
                 updatedLine.item_id = String(foundStock.item_id || "");
@@ -749,7 +698,7 @@ if (repStats.pending > 0) {
                     String(ps.item_name || "").trim().toLowerCase() === String(updatedLine.item_name || "").trim().toLowerCase()
                 );
               const liveAvailable = stockRow
-                ? getStockRowAvailable(stockRow, id, prev)
+                ? getAvailablePurchaseQty(stockRow, id, prev)
                 : Number(updatedLine.max_stock || 0);
               updatedLine.max_stock = liveAvailable;
               if (qty > liveAvailable) {
@@ -853,18 +802,14 @@ if (repStats.pending > 0) {
             String(purchase.item_name || "").trim().toLowerCase() === String(it.item_name || "").trim().toLowerCase()
           );
           const lineQty = Number(it.quantity || 0);
-          // Available = inward stock − doosron ka sold − is invoice ki baaki lines.
-          // BOM-SET row ho to components se mil kar available nikalo.
-          let computedMax: number;
-          if (matchedStock && matchedStock.inward_no === "BOM-SET" && matchedStock.item_id) {
-            computedMax = getBomParentAvailable(Number(matchedStock.item_id), undefined, []);
-          } else {
-            const soldByOthers = Math.max(0, Number(soldByPurchaseLine[lineKey] || 0) - Number(ownSavedByKey[lineKey] || 0));
-            const ownOtherLines = Math.max(0, Number(ownSavedByKey[lineKey] || 0) - lineQty);
-            computedMax = matchedStock
-              ? Math.max(0, Number(matchedStock.quantity || 0) - soldByOthers - ownOtherLines)
-              : 0;
-          }
+          // Available = inward stock − doosron ka sold − is invoice ki baaki lines
+          // − BOM assembly ki consumption.
+          const soldByOthers = Math.max(0, Number(soldByPurchaseLine[lineKey] || 0) - Number(ownSavedByKey[lineKey] || 0));
+          const ownOtherLines = Math.max(0, Number(ownSavedByKey[lineKey] || 0) - lineQty);
+          const bomConsumed = Number(bomConsumedByLine[lineKey] || 0);
+          const computedMax = matchedStock
+            ? Math.max(0, Number(matchedStock.quantity || 0) - soldByOthers - ownOtherLines - bomConsumed)
+            : 0;
           return {
             id: Math.random().toString(),
             source: isJobLine ? (it.inward_no === "JOB-REP" ? "Repairing" : it.inward_no === "JOB-WAR" ? "Warranty" : "Reject") : "Spare Part",
@@ -1005,12 +950,31 @@ const handleDeleteInvoice = async (inv: Invoice) => {
   };
 
   const validateLiveSpareStock = async () => {
-    const [{ data: purchaseRows, error: purchaseError }, { data: soldRows, error: soldError }] = await Promise.all([
+    // BOM tables optional hain (migration na chali ho to query error deti hai) —
+    // unke liye alag se Promise.all, warna poora validation hi fail ho jata.
+    const [
+      { data: purchaseRows, error: purchaseError },
+      { data: soldRows, error: soldError },
+    ] = await Promise.all([
       sc("purchases").select("inward_no, purchase_no, item_name, item_code, quantity"),
       sc("invoice_items").select("invoice_id, inward_no, item_name, quantity")
     ]);
     if (purchaseError) throw purchaseError;
     if (soldError) throw soldError;
+
+    let assemblyRows: any[] = [];
+    let assemblyItemRows: any[] = [];
+    try {
+      const [asmRes, asmItemRes] = await Promise.all([
+        sc("bom_assemblies").select("assembly_no, set_item_name, set_quantity"),
+        sc("bom_assembly_items").select("component_inward_no, component_item_name, quantity")
+      ]);
+      if (!asmRes.error && asmRes.data) assemblyRows = asmRes.data as any[];
+      if (!asmItemRes.error && asmItemRes.data) assemblyItemRows = asmItemRes.data as any[];
+    } catch {
+      assemblyRows = [];
+      assemblyItemRows = [];
+    }
 
     const purchasedByKey: Record<string, number> = {};
     (purchaseRows || []).forEach((purchase: any) => {
@@ -1020,6 +984,27 @@ const handleDeleteInvoice = async (inv: Invoice) => {
         item_name: purchase.item_name || "",
       });
       purchasedByKey[key] = (purchasedByKey[key] || 0) + Number(purchase.quantity || 0);
+    });
+    // SET (assembly) bhi stock hai — inhe purchases me count karo, warna set ki
+    // line validation me 0 available dikhega (set purchases table me hai hi nahi).
+    assemblyRows.forEach((asm) => {
+      const key = getPurchaseLineKey({
+        inward_no: String(asm.assembly_no || ""),
+        item_code: "",
+        item_name: String(asm.set_item_name || ""),
+      });
+      purchasedByKey[key] = (purchasedByKey[key] || 0) + Number(asm.set_quantity || 0);
+    });
+
+    // Components ki assembly consumption — inward batch se stock kha chuka hai.
+    const consumedByKey: Record<string, number> = {};
+    assemblyItemRows.forEach((row) => {
+      const key = getPurchaseLineKey({
+        inward_no: String(row.component_inward_no || ""),
+        item_code: "",
+        item_name: String(row.component_item_name || ""),
+      });
+      consumedByKey[key] = (consumedByKey[key] || 0) + Number(row.quantity || 0);
     });
 
     const soldByKey: Record<string, number> = {};
@@ -1034,6 +1019,9 @@ const handleDeleteInvoice = async (inv: Invoice) => {
       soldByKey[key] = (soldByKey[key] || 0) + Number(sold.quantity || 0);
     });
 
+    const availableFor = (key: string) =>
+      Math.max(0, (purchasedByKey[key] || 0) - (soldByKey[key] || 0) - (consumedByKey[key] || 0));
+
     const requestedByKey: Record<string, number> = {};
     lineItems.forEach((line) => {
       if (line.source !== "Spare Part") return;
@@ -1041,24 +1029,11 @@ const handleDeleteInvoice = async (inv: Invoice) => {
       requestedByKey[key] = (requestedByKey[key] || 0) + Number(line.quantity || 0);
     });
 
-    const exceeded = Object.entries(requestedByKey).find(([key, requestedQty]) => {
-      const availableQty = (purchasedByKey[key] || 0) - (soldByKey[key] || 0);
-      return requestedQty > availableQty;
-    });
+    const exceeded = Object.entries(requestedByKey).find(([key, requestedQty]) => requestedQty > availableFor(key));
     if (exceeded) {
-      const availableQty = Math.max(0, (purchasedByKey[exceeded[0]] || 0) - (soldByKey[exceeded[0]] || 0));
-      throw new Error(`Stock available sirf ${availableQty} hai. Isse zyada spare quantity ka invoice nahi ban sakta.`);
-    }
-
-    // BOM-SET (kit/set) lines: components ke available stock se check karo.
-    for (const line of lineItems) {
-      if (line.source !== "Spare Part" || line.inward_no !== "BOM-SET" || !line.item_id) continue;
-      const parentAvail = getBomParentAvailable(Number(line.item_id), line.id);
-      if (Number(line.quantity || 0) > parentAvail) {
-        throw new Error(
-          `"${line.item_name}" ka stock available sirf ${parentAvail} hai (apna ready stock + components). Isse zyada quantity ka invoice nahi ban sakta.`,
-        );
-      }
+      throw new Error(
+        `Stock available sirf ${availableFor(exceeded[0])} hai. Isse zyada spare quantity ka invoice nahi ban sakta.`,
+      );
     }
   };
 

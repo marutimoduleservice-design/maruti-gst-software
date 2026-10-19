@@ -20,6 +20,9 @@ function NetProfitReport() {
   const [purchases, setPurchases] = useState<Purchase[]>([]);
   const [items, setItems] = useState<Item[]>([]);
   const [lines, setLines] = useState<InvoiceLine[]>([]);
+  // BOM assembly (optional table) - set ka stock + components ki consumption
+  const [assemblies, setAssemblies] = useState<any[]>([]);
+  const [assemblyItems, setAssemblyItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [reloadKey, setReloadKey] = useState(0);
@@ -54,6 +57,20 @@ function NetProfitReport() {
         }
         setItems(itemRows as Item[]);
         setLines((lineRes.data || []) as InvoiceLine[]);
+
+        // BOM assembly tables optional hain (migration na chali ho to feature off),
+        // isliye alag try/catch - warna poora report hi load nahi hoga.
+        try {
+          const [asmRes, asmItemRes] = await Promise.all([
+            sc("bom_assemblies").select("assembly_no, set_item_id, set_item_name, set_item_code, set_quantity, set_rate"),
+            sc("bom_assembly_items").select("component_item_id, component_item_name, component_item_code, component_inward_no, quantity")
+          ]);
+          setAssemblies(asmRes.error ? [] : ((asmRes.data || []) as any[]));
+          setAssemblyItems(asmItemRes.error ? [] : ((asmItemRes.data || []) as any[]));
+        } catch {
+          setAssemblies([]);
+          setAssemblyItems([]);
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unable to load report data.";
         setLoadError(message);
@@ -100,6 +117,39 @@ function NetProfitReport() {
         };
         inwardByItemId[item.id] = (inwardByItemId[item.id] || 0) + toNumber(purchase.quantity);
       }
+    });
+
+    // BOM Assembly: naya SET inward (sales se pehle taaki uski sale batch kaat sake)
+    // aur components ki consumption inward batch se.
+    assemblies.forEach((asm) => {
+      const item = findItem(asm.set_item_name, asm.set_item_code) ||
+        items.find((i) => Number(i.id) === Number(asm.set_item_id));
+      const inwNo = String(asm.assembly_no || "").trim();
+      const qty = toNumber(asm.set_quantity);
+      if (!item || !inwNo || qty <= 0) return;
+      const key = inwardKey(inwNo, item.id);
+      const prev = inwardMap[key] || { qty: 0, rate: 0, value: 0 };
+      const rate = toNumber(asm.set_rate);
+      inwardMap[key] = {
+        qty: prev.qty + qty,
+        rate: rate > 0 ? rate : prev.rate,
+        value: prev.value + qty * rate,
+      };
+      inwardByItemId[item.id] = (inwardByItemId[item.id] || 0) + qty;
+    });
+    assemblyItems.forEach((row) => {
+      const item = findItem(row.component_item_name, row.component_item_code);
+      const qty = toNumber(row.quantity);
+      if (!item || qty <= 0) return;
+      outwardByItemId[item.id] = (outwardByItemId[item.id] || 0) + qty;
+      const inwNo = String(row.component_inward_no || "").trim();
+      if (!inwNo) return;
+      const entry = inwardMap[inwardKey(inwNo, item.id)];
+      if (!entry) return;
+      const before = entry.qty;
+      const used = Math.min(qty, before);
+      entry.qty = Math.max(0, before - used);
+      entry.value = before > 0 ? entry.value * (entry.qty / before) : 0;
     });
 
     lines.forEach((line) => {
@@ -161,7 +211,7 @@ function NetProfitReport() {
       }
       return sum + itemStockValue;
     }, 0);
-  }, [items, purchases, lines, jobs]);
+  }, [items, purchases, lines, jobs, assemblies, assemblyItems]);
   const warrantyPercentage = totals.repairQty ? totals.warrantyQty / totals.repairQty * 100 : 0;
 
   // ─── Party Wise Module Repair ──────────────────────────────

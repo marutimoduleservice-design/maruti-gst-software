@@ -8,7 +8,9 @@ type TransactionRecord = {
   date: string;
   item_code: string;
   item_name: string;
-  type: "Purchase" | "Sale";
+  // Purchase = khareed (+), Assembly = set bana (+), Sale = bikri (-),
+  // Assembly Use = components assembly me khaaye (-)
+  type: "Purchase" | "Sale" | "Assembly" | "Assembly Use";
   entry_no: string;
   qty: number;
 };
@@ -74,6 +76,48 @@ function ItemWiseQtyInOutReport() {
             qty: Math.abs(Number(p.quantity || 0)),
           });
         });
+      }
+
+      // 2b. BOM Assembly (optional table): set banne par INWARD (+),
+      //     components khane par OUTWARD (-). Migration na chali ho to skip.
+      try {
+        const [asmRes, asmItemRes] = await Promise.all([
+          sc("bom_assemblies").select("id, assembly_no, assembly_date, set_item_id, set_item_name, set_item_code, set_quantity, created_at"),
+          sc("bom_assembly_items").select("id, assembly_id, component_item_name, component_item_code, component_inward_no, quantity, created_at")
+        ]);
+
+        const asmById = new Map<number, any>();
+        (asmRes.data || []).forEach((a: any) => {
+          asmById.set(Number(a.id), a);
+          const iName = a.set_item_name || "Unknown Item";
+          const iCode = a.set_item_code || itemMap[iName.trim().toLowerCase()] || "ITM-GEN";
+          combined.push({
+            id: `ASM-${a.id}`,
+            date: a.assembly_date || a.created_at?.slice(0, 10) || "-",
+            item_code: iCode,
+            item_name: iName,
+            type: "Assembly",
+            entry_no: a.assembly_no || `ASM-${a.id}`,
+            qty: Math.abs(Number(a.set_quantity || 0)),
+          });
+        });
+
+        (asmItemRes.data || []).forEach((r: any) => {
+          const asm = asmById.get(Number(r.assembly_id));
+          const iName = r.component_item_name || "Unknown Item";
+          const iCode = r.component_item_code || itemMap[iName.trim().toLowerCase()] || "ITM-GEN";
+          combined.push({
+            id: `ASM-ITEM-${r.id}`,
+            date: asm?.assembly_date || r.created_at?.slice(0, 10) || "-",
+            item_code: iCode,
+            item_name: iName,
+            type: "Assembly Use",
+            entry_no: asm?.assembly_no || `ASM-${r.assembly_id}`,
+            qty: Math.abs(Number(r.quantity || 0)),
+          });
+        });
+      } catch (e) {
+        console.log("BOM assembly rows skipped:", e);
       }
 
       // 3. Fetch Invoices / Sales (Outward -> Negative Qty)
@@ -211,7 +255,7 @@ function ItemWiseQtyInOutReport() {
     let totalOut = 0;
 
     filteredData.forEach((t) => {
-      if (t.type === "Purchase") {
+      if (t.type === "Purchase" || t.type === "Assembly") {
         totalIn += t.qty;
       } else {
         totalOut += t.qty;
@@ -244,8 +288,8 @@ function ItemWiseQtyInOutReport() {
     ];
 
     const rows = filteredData.map((item) => {
-      const isPurchase = item.type === "Purchase";
-      const formattedQty = `${isPurchase ? "+" : "-"}${item.qty}`;
+      const isIn = item.type === "Purchase" || item.type === "Assembly";
+      const formattedQty = `${isIn ? "+" : "-"}${item.qty}`;
 
       return [
         `"${item.date}"`,
@@ -253,8 +297,8 @@ function ItemWiseQtyInOutReport() {
         `"${item.item_name}"`,
         `"${item.type}"`,
         `"${item.entry_no}"`,
-        isPurchase ? item.qty : 0,
-        !isPurchase ? item.qty : 0,
+        isIn ? item.qty : 0,
+        !isIn ? item.qty : 0,
         `"${formattedQty}"`,
       ].join(",");
     });
@@ -297,7 +341,7 @@ function ItemWiseQtyInOutReport() {
             Item Wise Qty In Out Report
           </h1>
           <p style={{ color: "#64748b", margin: "4px 0 0", fontSize: 14 }}>
-            Detailed inventory audit log: Purchases (Inward / +) and Sales (Outward / -).
+            Detailed inventory audit log: Purchases & Assemblies (Inward / +), Sales & Assembly Consumption (Outward / -).
           </p>
         </div>
 
@@ -433,6 +477,8 @@ function ItemWiseQtyInOutReport() {
             <option value="All">All Movements</option>
             <option value="Purchase">Purchase (Inward +)</option>
             <option value="Sale">Sale (Outward -)</option>
+            <option value="Assembly">Assembly Set Made (Inward +)</option>
+            <option value="Assembly Use">Assembly Consumed (Outward -)</option>
           </select>
 
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -551,7 +597,11 @@ function ItemWiseQtyInOutReport() {
                 </tr>
               ) : (
 sortedTransactions.map((item) => {
-                  const isPurchase = item.type === "Purchase";
+                  const isIn = item.type === "Purchase" || item.type === "Assembly";
+                  const badgeBg =
+                    item.type === "Purchase" ? "#dcfce7" : item.type === "Assembly" ? "#e0e7ff" : item.type === "Assembly Use" ? "#fef3c7" : "#fee2e2";
+                  const badgeColor =
+                    item.type === "Purchase" ? "#166534" : item.type === "Assembly" ? "#3730a3" : item.type === "Assembly Use" ? "#92400e" : "#991b1b";
 
                   return (
                     <tr
@@ -575,8 +625,8 @@ sortedTransactions.map((item) => {
                       <td style={tdStyle}>
                         <span
                           style={{
-                            background: isPurchase ? "#dcfce7" : "#fee2e2",
-                            color: isPurchase ? "#166534" : "#991b1b",
+                            background: badgeBg,
+                            color: badgeColor,
                             padding: "4px 10px",
                             borderRadius: 6,
                             fontSize: 12,
@@ -598,10 +648,10 @@ sortedTransactions.map((item) => {
                           textAlign: "right",
                           fontWeight: 800,
                           fontSize: 14,
-                          color: isPurchase ? "#16a34a" : "#dc2626",
+                          color: isIn ? "#16a34a" : "#dc2626",
                         }}
                       >
-                        {isPurchase ? `+${item.qty}` : `-${item.qty}`}
+                        {isIn ? `+${item.qty}` : `-${item.qty}`}
                       </td>
                     </tr>
                   );
