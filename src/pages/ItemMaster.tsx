@@ -15,6 +15,13 @@ type Item = {
   min_stock: number | null;
 };
 
+type BomRow = {
+  id: number;
+  parent_item_id: number;
+  child_item_id: number;
+  quantity: number;
+};
+
 // CSV Line Parser
 const parseCSVLine = (text: string): string[] => {
   const result: string[] = [];
@@ -58,6 +65,14 @@ function ItemMaster() {
   const [csvFile, setCsvFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  // Set / Kit BOM (item_bom) State
+  const [bomRows, setBomRows] = useState<BomRow[]>([]);
+  const [bomParentId, setBomParentId] = useState("");
+  const [bomChildId, setBomChildId] = useState("");
+  const [bomQty, setBomQty] = useState("1");
+  const [bomSaving, setBomSaving] = useState(false);
+  const [bomQtyDraft, setBomQtyDraft] = useState<Record<number, string>>({});
+
   const loadItems = async () => {
     setLoading(true);
     const { data, error } = await sc("items")
@@ -84,8 +99,21 @@ function ItemMaster() {
     setLoading(false);
   };
 
+  const loadBom = async () => {
+    const { data, error } = await sc("item_bom")
+      .select("id, parent_item_id, child_item_id, quantity");
+    if (error) {
+      // item_bom migration na chali ho toh page crash nahi hona chahiye
+      console.error("Error loading item_bom:", error);
+      setBomRows([]);
+    } else {
+      setBomRows((data || []) as BomRow[]);
+    }
+  };
+
   useEffect(() => {
     loadItems();
+    loadBom();
   }, []);
 
   const resetForm = () => {
@@ -171,6 +199,113 @@ function ItemMaster() {
     const { error } = await sc("items").delete().neq("id", 0);
     if (error) alert("Error: " + error.message);
     else loadItems();
+  };
+
+  // ---------- Set / Kit BOM (item_bom) ----------
+  const itemsById = useMemo(() => {
+    const map = new Map<number, Item>();
+    items.forEach((it) => map.set(Number(it.id), it));
+    return map;
+  }, [items]);
+
+  // Dropdown: Item Master ke saare items A-Z
+  const alphaItems = useMemo(() => {
+    return [...items].sort((a, b) =>
+      String(a.item_name || "").localeCompare(String(b.item_name || ""), "en", { sensitivity: "base" }),
+    );
+  }, [items]);
+
+  const bomParentNum = Number(bomParentId) || 0;
+
+  const componentsOfParent = useMemo(
+    () => bomRows.filter((r) => Number(r.parent_item_id) === bomParentNum),
+    [bomRows, bomParentNum],
+  );
+
+  // Component dropdown: set item khud nahi, aur jo already BOM me hain wo bhi nahi
+  const childOptions = useMemo(() => {
+    const used = new Set(componentsOfParent.map((r) => Number(r.child_item_id)));
+    return alphaItems.filter(
+      (it) => Number(it.id) !== bomParentNum && !used.has(Number(it.id)),
+    );
+  }, [alphaItems, bomParentNum, componentsOfParent]);
+
+  const itemLabel = (id: number) => {
+    const it = itemsById.get(Number(id));
+    if (!it) return `Item #${id}`;
+    return `${it.item_code ? it.item_code + " - " : ""}${it.item_name}`;
+  };
+
+  const handleAddComponent = async () => {
+    if (!bomParentNum) {
+      alert("Pehle Set/Kit item select karo.");
+      return;
+    }
+    const childNum = Number(bomChildId);
+    if (!childNum) {
+      alert("Component item select karo.");
+      return;
+    }
+    if (childNum === bomParentNum) {
+      alert("Set item apna hi component nahi ban sakta.");
+      return;
+    }
+    const q = Number(bomQty);
+    if (!q || q <= 0) {
+      alert("Qty 1 se kam nahi ho sakti.");
+      return;
+    }
+
+    setBomSaving(true);
+    try {
+      const { error } = await sc("item_bom").insert([
+        { parent_item_id: bomParentNum, child_item_id: childNum, quantity: q },
+      ]);
+      if (error) throw error;
+      setBomChildId("");
+      setBomQty("1");
+      await loadBom();
+    } catch (err: any) {
+      alert("Component add fail: " + (err?.message || String(err)));
+    } finally {
+      setBomSaving(false);
+    }
+  };
+
+  const handleRemoveComponent = async (row: BomRow) => {
+    if (!window.confirm(`"${itemLabel(row.child_item_id)}" ko BOM se hata dein?`)) return;
+    setBomSaving(true);
+    try {
+      const { error } = await sc("item_bom").delete().eq("id", row.id);
+      if (error) throw error;
+      await loadBom();
+    } catch (err: any) {
+      alert("Component delete fail: " + (err?.message || String(err)));
+    } finally {
+      setBomSaving(false);
+    }
+  };
+
+  // Qty inline edit — blur/Enter par save
+  const handleQtySave = async (row: BomRow) => {
+    const draft = bomQtyDraft[row.id];
+    if (draft === undefined || Number(draft) === Number(row.quantity)) return;
+    const q = Number(draft);
+    if (!q || q <= 0) {
+      alert("Qty 1 se kam nahi ho sakti.");
+      setBomQtyDraft((d) => ({ ...d, [row.id]: String(row.quantity) }));
+      return;
+    }
+    setBomSaving(true);
+    try {
+      const { error } = await sc("item_bom").update({ quantity: q }).eq("id", row.id);
+      if (error) throw error;
+      await loadBom();
+    } catch (err: any) {
+      alert("Qty update fail: " + (err?.message || String(err)));
+    } finally {
+      setBomSaving(false);
+    }
   };
 
   // Bulk Import CSV Logic
@@ -508,6 +643,187 @@ function ItemMaster() {
         </form>
       </div>
 
+      {/* SET / KIT BOM EDITOR CARD */}
+      <div
+        style={{
+          background: "#fff",
+          padding: 20,
+          marginBottom: 20,
+          borderRadius: 14,
+          border: "1px solid #e2e8f0",
+          boxShadow: "0 2px 10px rgba(0,0,0,0.03)",
+        }}
+      >
+        <h3 style={{ fontSize: 15, margin: "0 0 6px", color: "#1e293b" }}>
+          🧩 Set / Kit BOM (Bill of Materials)
+        </h3>
+        <p style={{ fontSize: 12, color: "#64748b", margin: "0 0 14px" }}>
+          Set item chuno, uske components add karo. Ye definition BOM Assembly page par
+          use hoti hai — wahan se ek click me set ban jayega aur stock auto kat jayega.
+        </p>
+
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 16 }}>
+          <label style={{ ...labelStyle, minWidth: 260, flex: "1 1 260px", marginBottom: 0 }}>
+            Set / Kit Item (Parent)
+            <select
+              value={bomParentId}
+              onChange={(e) => {
+                setBomParentId(e.target.value);
+                setBomChildId("");
+              }}
+              style={{ ...inputStyle, marginTop: 4 }}
+            >
+              <option value="">-- Set item select karo --</option>
+              {alphaItems.map((it) => (
+                <option key={it.id} value={String(it.id)}>
+                  {it.item_code ? `${it.item_code} - ` : ""}
+                  {it.item_name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label style={{ ...labelStyle, minWidth: 260, flex: "1 1 260px", marginBottom: 0 }}>
+            Component (Child)
+            <select
+              value={bomChildId}
+              onChange={(e) => setBomChildId(e.target.value)}
+              disabled={!bomParentNum}
+              style={{ ...inputStyle, marginTop: 4, background: bomParentNum ? "#fff" : "#f1f5f9" }}
+            >
+              <option value="">
+                {bomParentNum ? "-- Component select karo --" : "Pehle set item chuno"}
+              </option>
+              {childOptions.map((it) => (
+                <option key={it.id} value={String(it.id)}>
+                  {it.item_code ? `${it.item_code} - ` : ""}
+                  {it.item_name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label style={{ ...labelStyle, width: 110, marginBottom: 0 }}>
+            Qty / Set
+            <input
+              type="number"
+              min={1}
+              value={bomQty}
+              onChange={(e) => setBomQty(e.target.value)}
+              disabled={!bomParentNum}
+              style={{ ...inputStyle, marginTop: 4 }}
+            />
+          </label>
+
+          <button
+            type="button"
+            onClick={handleAddComponent}
+            disabled={bomSaving || !bomParentNum || !bomChildId}
+            style={{
+              background: "#7c3aed",
+              color: "#fff",
+              border: "none",
+              padding: "9px 16px",
+              borderRadius: 6,
+              cursor: bomSaving || !bomParentNum || !bomChildId ? "not-allowed" : "pointer",
+              fontWeight: 700,
+              fontSize: 13,
+              opacity: bomSaving || !bomParentNum || !bomChildId ? 0.55 : 1,
+            }}
+          >
+            ＋ Add Component
+          </button>
+        </div>
+
+        {!bomParentNum ? (
+          <p style={{ fontSize: 13, color: "#94a3b8", margin: 0 }}>
+            Upar set/kit item select karke components define karo.
+          </p>
+        ) : componentsOfParent.length === 0 ? (
+          <p style={{ fontSize: 13, color: "#b91c1c", margin: 0 }}>
+            Is set item ki abhi tak BOM definition nahi hai — neeche se components add karo.
+          </p>
+        ) : (
+          <div style={{ overflowX: "auto", border: "1px solid #e2e8f0", borderRadius: 8 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 520 }}>
+              <thead>
+                <tr style={{ background: "#f8fafc", fontSize: 12, color: "#64748b" }}>
+                  <th style={{ padding: "10px 12px", textAlign: "left" }}>Component Item</th>
+                  <th style={{ padding: "10px 12px", textAlign: "right", width: 130 }}>Qty / Set</th>
+                  <th style={{ padding: "10px 12px", textAlign: "right", width: 110 }}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {componentsOfParent.map((row) => (
+                  <tr key={row.id} style={{ borderTop: "1px solid #f1f5f9", fontSize: 13 }}>
+                    <td style={{ padding: "10px 12px" }}>
+                      <strong style={{ color: "#2563eb" }}>
+                        {itemsById.get(Number(row.child_item_id))?.item_code || ""}
+                      </strong>{" "}
+                      {itemsById.get(Number(row.child_item_id))?.item_name || `Item #${row.child_item_id}`}
+                    </td>
+                    <td style={{ padding: "10px 12px", textAlign: "right" }}>
+                      <input
+                        type="number"
+                        min={1}
+                        value={
+                          bomQtyDraft[row.id] !== undefined
+                            ? bomQtyDraft[row.id]
+                            : String(row.quantity)
+                        }
+                        onChange={(e) =>
+                          setBomQtyDraft((d) => ({ ...d, [row.id]: e.target.value }))
+                        }
+                        onBlur={() => handleQtySave(row)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                        }}
+                        disabled={bomSaving}
+                        style={{
+                          width: 80,
+                          padding: "5px 8px",
+                          borderRadius: 6,
+                          border: "1px solid #cbd5e1",
+                          textAlign: "right",
+                          fontSize: 13,
+                        }}
+                      />
+                    </td>
+                    <td style={{ padding: "10px 12px", textAlign: "right" }}>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveComponent(row)}
+                        disabled={bomSaving}
+                        style={{
+                          background: "#dc2626",
+                          color: "#fff",
+                          border: "none",
+                          padding: "5px 10px",
+                          borderRadius: 4,
+                          cursor: "pointer",
+                          fontSize: 12,
+                        }}
+                      >
+                        Remove
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                <tr style={{ borderTop: "2px solid #e2e8f0", background: "#f8fafc", fontSize: 13 }}>
+                  <td style={{ padding: "10px 12px", fontWeight: 700 }}>
+                    Total {componentsOfParent.length} component(s)
+                  </td>
+                  <td style={{ padding: "10px 12px", textAlign: "right", fontWeight: 700 }}>
+                    {componentsOfParent.reduce((s, r) => s + (Number(r.quantity) || 0), 0)}
+                  </td>
+                  <td />
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
       {/* ITEM LIST TABLE */}
       <div
         style={{
@@ -573,6 +889,14 @@ function ItemMaster() {
                     </td>
                     <td style={{ padding: 12 }}>
                       <strong>{it.item_name}</strong>
+                      {bomRows.some((r) => Number(r.parent_item_id) === Number(it.id)) && (
+                        <span
+                          title="Is item ka BOM defined hai (Set/Kit)"
+                          style={{ marginLeft: 6, fontSize: 12, color: "#7c3aed" }}
+                        >
+                          🧩
+                        </span>
+                      )}
                     </td>
                     <td style={{ padding: 12 }}>{it.unit || "PCS"}</td>
                     <td style={{ padding: 12 }}>{it.hsn_code || "—"}</td>
