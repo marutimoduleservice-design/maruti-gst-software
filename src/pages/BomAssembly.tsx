@@ -128,11 +128,12 @@ function BomAssembly() {
     loadData();
   }, []);
 
-  // item_bom me jin items ke parent hain - wahi set/kit ban sakte hain
+  // Set/Kit dropdown me Item Master ke saare items, alphabetically (A->Z)
   const setOptions = useMemo(() => {
-    const parentIds = Array.from(new Set(boms.map((b) => b.parent_item_id)));
-    return items.filter((it) => parentIds.includes(Number(it.id)));
-  }, [items, boms]);
+    return [...items].sort((a, b) =>
+      String(a.item_name || "").localeCompare(String(b.item_name || ""), "en", { sensitivity: "base" }),
+    );
+  }, [items]);
 
   const childrenByParent = useMemo(() => {
     const map = new Map<number, { childId: number; qty: number }[]>();
