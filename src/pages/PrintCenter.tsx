@@ -333,6 +333,23 @@ function PrintCenter() {
     openDoc("Sales Invoice - " + (inv.invoice_no || ""), body, { mobile: customer?.mobile, message });
   };
 
+  // Payment Receipt ke liye payment details ek line me (Notes section me print hote hain)
+  const receiptPayDetails = (rc: any) => {
+    const parts: string[] = [];
+    const mode = String(rc.payment_mode || rc.mode || "Cash");
+    parts.push(`Payment Mode: ${mode}`);
+    if (mode.toLowerCase() === "cheque") {
+      const cNo = rc.cheque_no || rc.cheque_number;
+      if (cNo) parts.push(`Cheque No: ${cNo}`);
+      if (rc.cheque_date) parts.push(`Cheque Date: ${fmtDate(rc.cheque_date)}`);
+    }
+    if (mode.toLowerCase() !== "cash") {
+      const ref = rc.utr_no || rc.transaction_id || rc.reference_id;
+      if (ref) parts.push(`UTR/Ref No: ${ref}`);
+    }
+    return parts.join("  •  ");
+  };
+
   const printBodyForReceipt = (rc: any) => {
     const amount = Number(rc.payment_in ?? rc.credit_amount ?? 0);
     const refs = (rc.customerRefs || []);
@@ -451,22 +468,6 @@ function PrintCenter() {
       <div class="addr">${cust?.business_address || cust?.address ? esc(cust.business_address || cust.address) : ""}</div>
       <div>${cust?.mobile ? "Mobile: " + esc(cust.mobile) : ""}</div>
     </div>
-    <div class="info-box">
-      <div class="info-row"><span>Receipt No</span><b style="color:#2563eb">${esc(rc.transaction_no || rc.reference_no || "RC-" + String(rc.id || ""))}</b></div>
-      <div class="info-row"><span>Payment Mode</span><b>${esc(rc.payment_mode || rc.mode || "Cash")}</b></div>
-      ${(rc.payment_mode || rc.mode || "").toString().toLowerCase() === "cheque" && (rc.cheque_no || rc.cheque_number)
-        ? `<div class="info-row"><span>Cheque No</span><b>${esc(rc.cheque_no || rc.cheque_number || "-")}</b></div>`
-        : ""}
-      ${(rc.payment_mode || rc.mode || "").toString().toLowerCase() === "cheque" && (rc.cheque_date)
-        ? `<div class="info-row"><span>Cheque Date</span><b>${esc(String(rc.cheque_date).slice(0, 10))}</b></div>`
-        : ""}
-      ${((rc.payment_mode || rc.mode || "").toString().toLowerCase() !== "cash") && (rc.utr_no || rc.transaction_id || rc.reference_id)
-        ? `<div class="info-row"><span>UTR/Ref No</span><b>${esc(rc.utr_no || rc.transaction_id || rc.reference_id || "-")}</b></div>`
-        : ""}
-      <div class="info-row"><span>Amount Received</span><b style="color:#15803d">${money(amount)}</b></div>
-      <div class="info-row"><span>Bills Covered</span><b>${refs.length}</b></div>
-      ${totalDisc > 0 ? `<div class="info-row"><span>Discount</span><b style="color:#b45309">${money(totalDisc)}</b></div>` : ""}
-    </div>
   </div>
   ${billTable}
   <div style="display:flex;align-items:center;gap:16px;padding:22px;border:1px solid #16a34a;border-radius:10px;margin:10px 0">
@@ -476,7 +477,7 @@ function PrintCenter() {
       <div style="font-size:12px;color:#166534"><b>Rupees:</b> ${numToWords(Math.round(amount))} Only</div>
     </div>
   </div>
-  <div class="notes"><b>Notes:</b> ${esc(rc.notes || rc.remarks || "Payment acknowledged. Thank you.")}</div>
+  <div class="notes"><b>Notes:</b> ${esc(rc.notes || rc.remarks || "Payment acknowledged. Thank you.")}<div style="margin-top:6px"><b>Payment Details:</b> ${esc(receiptPayDetails(rc))}</div></div>
   <div class="signatures">
     <div class="signature"><div class="line">Customer Signature</div>Received By</div>
     <div class="signature"><img class="sig-img" src="${SIGNATURE_DATA_URL}" alt="s"/><div class="line">${esc(COMPANY.signature_name)}</div>Cashier / Manager</div>
