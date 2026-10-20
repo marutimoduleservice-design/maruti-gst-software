@@ -468,6 +468,13 @@ function PrintCenter() {
       <div class="addr">${cust?.business_address || cust?.address ? esc(cust.business_address || cust.address) : ""}</div>
       <div>${cust?.mobile ? "Mobile: " + esc(cust.mobile) : ""}</div>
     </div>
+    <div class="info-box">
+      <div class="info-row"><span>Receipt No</span><b style="color:#2563eb">${esc(rc.transaction_no || rc.reference_no || "RC-" + String(rc.id || ""))}</b></div>
+      <div class="info-row"><span>Receipt Date</span><b>${esc(fmtDate(rc.transaction_date || rc.created_at))}</b></div>
+      <div class="info-row"><span>Amount Received</span><b style="color:#15803d">${money(amount)}</b></div>
+      <div class="info-row"><span>Bills Covered</span><b>${refs.length}</b></div>
+      ${totalDisc > 0 ? `<div class="info-row"><span>Discount</span><b style="color:#b45309">${money(totalDisc)}</b></div>` : ""}
+    </div>
   </div>
   ${billTable}
   <div style="display:flex;align-items:center;gap:16px;padding:22px;border:1px solid #16a34a;border-radius:10px;margin:10px 0">
